@@ -1,0 +1,9 @@
+.venv/
+.env
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+Mailroom_3-Day_Plan_and_Prompts.docx

@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mailroom"
+version = "0.1.0"
+description = "Document intake and case matching for a fictional law firm"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic==1.20.1",
+    "celery==5.6.3",
+    "fastapi==0.162.0",
+    "psycopg[binary]==3.3.6",
+    "python-multipart==0.0.33",
+    "sqlalchemy==2.0.55",
+    "uvicorn==0.54.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx==0.28.1",
+    "hypothesis==6.170.14",
+    "mypy==1.20.2",
+    "pytest==8.4.2",
+    "ruff==0.17.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "ownership: tests for code the project owner implements by hand",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["celery.*", "kombu.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["mailroom.tasks", "mailroom.celery_app"]
+disallow_untyped_decorators = false
+disallow_any_unimported = false

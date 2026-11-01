@@ -1,0 +1,91 @@
+# Local development only. Credentials come from .env, which is gitignored.
+x-app: &app
+  build: .
+  volumes:
+    - document-data:/data/documents
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?copy .env.example to .env}:${POSTGRES_PASSWORD:?copy .env.example to .env}@postgres:5432/${POSTGRES_DB:?copy .env.example to .env}
+    BROKER_URL: amqp://${RABBITMQ_USER:?copy .env.example to .env}:${RABBITMQ_PASSWORD:?copy .env.example to .env}@rabbitmq:5672//
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env}
+      POSTGRES_DB: ${POSTGRES_DB:?copy .env.example to .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?copy .env.example to .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?copy .env.example to .env}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 3s
+      timeout: 10s
+      retries: 40
+
+  migrate:
+    <<: *app
+    command: alembic upgrade head
+
+  api:
+    <<: *app
+    command: python -m mailroom.api
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  relay:
+    <<: *app
+    command: python -m mailroom.relay
+    # The relay exits rather than stay stuck, so something must start it again.
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    command: >-
+      celery --quiet -A mailroom.celery_app worker
+      -Q mailroom.extract,mailroom.classify,mailroom.match,mailroom.decide
+      --concurrency=2
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  test:
+    <<: *app
+    profiles: [test]
+    command: pytest
+
+volumes:
+  postgres-data:
+  document-data:
