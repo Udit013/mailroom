@@ -11,7 +11,7 @@ but has not been exercised.
 | Worker child killed mid-stage | Postgres rolls back, the message is redelivered, and the attempt stays counted | Automatic | Test, at every stage |
 | Whole worker killed | The same, and work resumes when a worker returns | `restart: unless-stopped`, or `docker compose start worker` after `docker kill` | Drill, test |
 | A document that keeps killing workers | Fails after 5 attempts with `ATTEMPTS_EXHAUSTED` | Manual: no retry route | Test |
-| Stage runs over 60 seconds | The child is killed and the sweeper re-dispatches it | Automatic, up to 5 attempts | Test |
+| Stage runs over its time limit (60 seconds by default) | The child is killed and the sweeper re-dispatches it | Automatic, up to 5 attempts | Test, with the limit set to 1 second. The 60-second default was not exercised |
 | Worker killed just after an external call | The call is repeated with the same key, and the receiver deduplicates | Automatic | Test, for each step |
 | Relay killed after publishing, before commit | The row stays unpublished, so the message is sent twice and the duplicate does nothing | Automatic | Test |
 | Relay stuck on a broker that stopped mid-frame | The pass deadline ends the process, and rows stay unpublished | Automatic restart | Test for the exit, and separately for restart. Not both together |
