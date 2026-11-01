@@ -13,7 +13,21 @@ def get_engine() -> Engine:
     global _engine
     if _engine is None:
         # hide_parameters keeps bound values out of SQLAlchemy error messages, and so out of logs.
-        _engine = create_engine(settings.database_url, pool_pre_ping=True, hide_parameters=True)
+        # The server-side timeouts stop a stuck query or abandoned transaction holding row
+        # locks for ever. A timed-out statement surfaces as an OperationalError.
+        _engine = create_engine(
+            settings.database_url,
+            pool_pre_ping=True,
+            hide_parameters=True,
+            connect_args={
+                "connect_timeout": settings.db_connect_timeout_seconds,
+                "options": (
+                    f"-c statement_timeout={settings.db_statement_timeout_ms} "
+                    "-c idle_in_transaction_session_timeout="
+                    f"{settings.db_idle_transaction_timeout_ms}"
+                ),
+            },
+        )
     return _engine
 
 

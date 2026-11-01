@@ -45,6 +45,29 @@ def test_celery_task_messages_are_replaced_because_they_quote_exceptions():
     assert CANARY not in JsonFormatter().format(log_record)
 
 
+def test_celery_failure_says_it_failed_and_keeps_the_task_id():
+    log_record = logging.LogRecord(
+        "celery.app.trace", logging.ERROR, "f.py", 1, f"Task raised: {CANARY}", (), None
+    )
+    log_record.__dict__["data"] = {"description": "raised unexpected", "id": "abc"}
+
+    entry = json.loads(JsonFormatter().format(log_record))
+
+    assert entry["message"] == "task raised unexpected"
+    assert entry["task_id"] == "abc"
+
+
+def test_celery_success_says_it_succeeded():
+    log_record = logging.LogRecord(
+        "celery.app.trace", logging.INFO, "f.py", 1, "Task done", ({"id": "abc"},), None
+    )
+
+    entry = json.loads(JsonFormatter().format(log_record))
+
+    assert entry["message"] == "task succeeded"
+    assert entry["task_id"] == "abc"
+
+
 def test_exception_message_is_dropped_but_its_type_and_location_are_kept():
     try:
         raise ValueError(CANARY)

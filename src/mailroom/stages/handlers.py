@@ -1,10 +1,9 @@
-"""Deterministic stub stages: the same bytes always give the same result.
+"""The four pipeline stages.
 
 Each handler runs inside the stage's transaction, so its writes commit or vanish together
 with the stage change. ON CONFLICT is a backstop: the stage guard is what stops a duplicate.
 """
 
-import re
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -14,8 +13,20 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from mailroom import storage
+from mailroom.classifier import Classifier, RulesClassifier
+from mailroom.extraction import ExtractedText, TextStatus, extract_text
+from mailroom.fields import Fields, extract_fields, normalize_case_number
+from mailroom.matcher import (
+    DEFAULT_THRESHOLDS,
+    MatchOutcome,
+    MatterRecord,
+    Thresholds,
+    match_document,
+    outcome_for,
+)
 from mailroom.models import (
     Classification,
     Document,
@@ -27,121 +38,132 @@ from mailroom.models import (
 )
 from mailroom.stages import PermanentStageError
 
-CLASSIFIER = "rules-v1"
+CLASSIFIER: Classifier = RulesClassifier()
 CONFIDENT = Decimal("0.700")
-AUTO_FILE_SCORE = Decimal("0.900")
-REQUIRED_LEAD = Decimal("0.150")
-
-_MATTER_PATTERN = re.compile(r"Matter:\s*([A-Z0-9-]+)")
-_CLIENT_PATTERN = re.compile(r"Client:[ \t]*([^\r\n()]+)")
-_KEYWORDS = {
-    "MOTION": ("motion", "hearing"),
-    "CONTRACT": ("agreement", "contract"),
-    "CORRESPONDENCE": ("dear", "sincerely"),
+MAX_GENERATED_CANDIDATES = 50
+_MIN_TRIGRAM_SIMILARITY = 0.3
+UNREADABLE_REASONS = {
+    TextStatus.NO_TEXT: "NEEDS_OCR",
+    TextStatus.EMPTY: "EMPTY_DOCUMENT",
+    TextStatus.CORRUPT: "CORRUPT_DOCUMENT",
+    TextStatus.ENCRYPTED: "ENCRYPTED_DOCUMENT",
+    TextStatus.TOO_LARGE: "DOCUMENT_TOO_LARGE",
 }
+
+
+def _read_text(document: Document) -> ExtractedText:
+    try:
+        raw = storage.read(document.storage_path)
+    except FileNotFoundError as exc:
+        raise PermanentStageError("FILE_MISSING") from exc
+    return extract_text(raw, document.mime_type)
 
 
 def _extract_output(session: Session, document: Document) -> dict[str, Any]:
     return session.get_one(StageResult, (document.id, Stage.EXTRACT.value)).output
 
 
-def extract(session: Session, document: Document) -> dict[str, Any]:
-    try:
-        raw = storage.read(document.storage_path)
-    except FileNotFoundError as exc:
-        raise PermanentStageError("FILE_MISSING") from exc
+def _is_readable(extracted: dict[str, Any]) -> bool:
+    return bool(extracted["text_status"] == TextStatus.OK.value)
 
-    # Latin-1 maps every byte, so a PDF's uncompressed text is searchable without a parser.
-    text = raw.decode("latin-1")
-    clients = {name.strip().lower(): name.strip() for name in _CLIENT_PATTERN.findall(text)}
-    lowered = text.lower()
-    return {
-        "matter_numbers": sorted(set(_MATTER_PATTERN.findall(text))),
-        "client_names": sorted(clients.values()),
-        "document_types": sorted(
-            document_type
-            for document_type, keywords in _KEYWORDS.items()
-            if any(keyword in lowered for keyword in keywords)
-        ),
-    }
+
+def extract(session: Session, document: Document) -> dict[str, Any]:
+    result = _read_text(document)
+    if result.status is not TextStatus.OK:
+        return {"text_status": result.status.value}
+    return {"text_status": result.status.value, **extract_fields(result.text).to_output()}
 
 
 def classify(session: Session, document: Document) -> dict[str, Any]:
-    types = _extract_output(session, document)["document_types"]
-    if len(types) == 1:
-        document_type, confidence = types[0], Decimal("0.900")
-    elif types:
-        document_type, confidence = "AMBIGUOUS", Decimal("0.500")
-    else:
-        document_type, confidence = "OTHER", Decimal("0.200")
+    # Without text there is nothing to classify, and a guess would look like a result.
+    if not _is_readable(_extract_output(session, document)):
+        return {"skipped": True}
 
+    classification = CLASSIFIER.classify(_read_text(document).text)
     session.execute(
         insert(Classification)
         .values(
             document_id=document.id,
             tenant_id=document.tenant_id,
-            document_type=document_type,
-            confidence=confidence,
-            method=CLASSIFIER,
+            document_type=classification.document_type.value,
+            confidence=classification.confidence,
+            method=CLASSIFIER.method,
         )
         .on_conflict_do_nothing()
     )
-    return {"document_type": document_type, "confidence": str(confidence)}
+    return {
+        "document_type": classification.document_type.value,
+        "confidence": str(classification.confidence),
+        "scores": classification.scores,
+    }
 
 
-def _score(number_hit: bool, client_hit: bool, client_given: bool) -> Decimal:
-    if number_hit and client_hit:
-        return Decimal("1.000")
-    if number_hit and not client_given:
-        return Decimal("0.800")
-    if client_hit:
-        return Decimal("0.600")
-    return Decimal("0.500")  # The number matched and the client contradicts it.
+def _candidate_conditions(fields: Fields) -> list[ColumnElement[bool]]:
+    numbers = [normalize_case_number(number) for number in fields.case_numbers]
+    normalized = func.upper(func.regexp_replace(Matter.matter_number, "[^A-Za-z0-9]", "", "g"))
+    conditions: list[ColumnElement[bool]] = []
+    if numbers:
+        conditions.append(normalized.in_(numbers))
+    for party in fields.parties:
+        conditions.append(
+            func.similarity(func.lower(Matter.client_name), party.lower())
+            > _MIN_TRIGRAM_SIMILARITY
+        )
+    return conditions
 
 
 def match(session: Session, document: Document) -> dict[str, Any]:
     extracted = _extract_output(session, document)
-    numbers = extracted["matter_numbers"]
-    clients = [client.lower() for client in extracted["client_names"]]
+    if not _is_readable(extracted):
+        return {"skipped": True}
 
-    matters = session.scalars(
-        select(Matter).where(
-            Matter.tenant_id == document.tenant_id,
-            or_(
-                Matter.matter_number.in_(numbers),
-                func.lower(Matter.client_name).in_(clients),
-            ),
-        )
-    ).all()
-
-    scored = sorted(
-        (
-            (
-                _score(
-                    matter.matter_number in numbers,
-                    matter.client_name.lower() in clients,
-                    bool(clients),
-                ),
-                matter,
-            )
-            for matter in matters
-        ),
-        key=lambda pair: (-pair[0], pair[1].matter_number),
+    fields = Fields.from_output(extracted)
+    conditions = _candidate_conditions(fields)
+    matters = (
+        session.scalars(
+            select(Matter)
+            .where(Matter.tenant_id == document.tenant_id, or_(*conditions))
+            .order_by(Matter.matter_number)
+            .limit(MAX_GENERATED_CANDIDATES)
+        ).all()
+        if conditions
+        else []
     )
-    for rank, (score, matter) in enumerate(scored, start=1):
+    records = [
+        MatterRecord(
+            matter.id,
+            matter.matter_number,
+            matter.client_name,
+            matter.opened_on,
+            matter.status == "CLOSED",
+        )
+        for matter in matters
+    ]
+
+    result = match_document(fields, records)
+    for rank, candidate in enumerate(result.candidates, start=1):
         session.execute(
             insert(MatchCandidate)
             .values(
                 tenant_id=document.tenant_id,
                 document_id=document.id,
-                matter_id=matter.id,
+                matter_id=candidate.matter_id,
                 rank=rank,
-                score=score,
-                signals={"closed": matter.status == "CLOSED"},
+                score=candidate.score,
+                signals={
+                    "closed": candidate.closed,
+                    "features": candidate.features,
+                    "explanation": candidate.explanation,
+                },
             )
             .on_conflict_do_nothing()
         )
-    return {"candidates": len(scored)}
+    return {
+        "outcome": result.outcome.value,
+        "candidates": len(result.candidates),
+        "confidence": str(result.confidence),
+        "gap": str(result.gap),
+    }
 
 
 @dataclass(frozen=True)
@@ -159,28 +181,42 @@ class Decision:
 
 
 def decide_outcome(
-    confidence: Decimal, candidates: Sequence[Candidate], conflicting: bool = False
+    confidence: Decimal,
+    candidates: Sequence[Candidate],
+    conflicting: bool = False,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
 ) -> Decision:
     """Candidates arrive best first. Anything short of a clear winner goes to a person."""
     if conflicting:
         return Decision(State.NEEDS_REVIEW, review_reason="CONFLICTING_MARKERS")
     if confidence < CONFIDENT:
         return Decision(State.NEEDS_REVIEW, review_reason="LOW_CONFIDENCE")
-    if not candidates:
-        return Decision(State.UNMATCHED, review_reason="NO_CANDIDATE")
 
-    best = candidates[0]
-    runner_up = candidates[1].score if len(candidates) > 1 else Decimal("0")
-    if best.closed:
+    outcome = outcome_for([candidate.score for candidate in candidates], thresholds)
+    if outcome is MatchOutcome.NO_MATCH:
+        return Decision(State.UNMATCHED, review_reason="NO_CANDIDATE")
+    if candidates[0].closed:
         return Decision(State.NEEDS_REVIEW, review_reason="MATTER_CLOSED")
-    if best.score >= AUTO_FILE_SCORE and best.score - runner_up >= REQUIRED_LEAD:
-        return Decision(State.READY_TO_FILE, matter_id=best.matter_id)
+    if outcome is MatchOutcome.CONFIDENT:
+        return Decision(State.READY_TO_FILE, matter_id=candidates[0].matter_id)
     return Decision(State.NEEDS_REVIEW, review_reason="AMBIGUOUS_MATCH")
 
 
+def _decision_output(decision: Decision) -> dict[str, Any]:
+    return {
+        "state": decision.state.value,
+        "matter_id": str(decision.matter_id) if decision.matter_id else None,
+        "review_reason": decision.review_reason,
+    }
+
+
 def decide(session: Session, document: Document) -> dict[str, Any]:
-    confidence = session.get_one(Classification, document.id).confidence
     extracted = _extract_output(session, document)
+    if not _is_readable(extracted):
+        reason = UNREADABLE_REASONS[TextStatus(extracted["text_status"])]
+        return _decision_output(Decision(State.NEEDS_REVIEW, review_reason=reason))
+
+    confidence = session.get_one(Classification, document.id).confidence
     rows = session.scalars(
         select(MatchCandidate)
         .where(MatchCandidate.document_id == document.id)
@@ -189,15 +225,9 @@ def decide(session: Session, document: Document) -> dict[str, Any]:
     decision = decide_outcome(
         confidence,
         [Candidate(row.matter_id, row.score, row.signals["closed"]) for row in rows],
-        # A document naming two matters or two clients is never a clear match, however well
-        # one of them scores.
-        conflicting=len(extracted["matter_numbers"]) > 1 or len(extracted["client_names"]) > 1,
+        conflicting=Fields.from_output(extracted).conflicting,
     )
-    return {
-        "state": decision.state.value,
-        "matter_id": str(decision.matter_id) if decision.matter_id else None,
-        "review_reason": decision.review_reason,
-    }
+    return _decision_output(decision)
 
 
 HANDLERS: dict[Stage, Callable[[Session, Document], dict[str, Any]]] = {

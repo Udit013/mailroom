@@ -1,6 +1,7 @@
 import codecs
 import hashlib
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -17,7 +18,9 @@ logger = logging.getLogger(__name__)
 
 PDF_SIGNATURE = b"%PDF-"
 _CHUNK_BYTES = 64 * 1024
-_ALLOWED_CONTROL_CHARACTERS = "\t\n\r\f"
+# Control characters other than tab, newline, form feed and carriage return. A regex keeps
+# this in C, because a Python loop over a 10 MB upload would stall the API for seconds.
+_FORBIDDEN_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
 _MAX_FILENAME_LENGTH = 255
 
 
@@ -47,14 +50,6 @@ class IngestResult:
     duplicate: bool
 
 
-def _is_plain_text(text: str) -> bool:
-    return all(
-        character in _ALLOWED_CONTROL_CHARACTERS
-        or (ord(character) >= 32 and ord(character) != 127)
-        for character in text
-    )
-
-
 def inspect(stream: BinaryIO) -> Inspected:
     """Classify by content alone. The extension and declared type are never consulted."""
     stream.seek(0)
@@ -75,7 +70,7 @@ def inspect(stream: BinaryIO) -> Inspected:
                 decoded = decoder.decode(chunk)
             except UnicodeDecodeError as exc:
                 raise UnsupportedContent from exc
-            if not _is_plain_text(decoded):
+            if _FORBIDDEN_CHARACTERS.search(decoded):
                 raise UnsupportedContent
 
     if size == 0:

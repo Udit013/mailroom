@@ -13,6 +13,7 @@ dependencies = [
     "celery==5.6.3",
     "fastapi==0.162.0",
     "psycopg[binary]==3.3.6",
+    "pypdf==6.21.4",
     "python-multipart==0.0.33",
     "sqlalchemy==2.0.55",
     "uvicorn==0.54.0",
@@ -23,7 +24,7 @@ dev = [
     "httpx==0.28.1",
     "hypothesis==6.170.14",
     "mypy==1.20.2",
-    "pytest==8.4.2",
+    "pytest==9.0.3",
     "ruff==0.17.3",
 ]
 
@@ -32,9 +33,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
-    "ownership: tests for code the project owner implements by hand",
+    "ownership: tests for the run_stage() contract",
 ]
 
 [tool.ruff]

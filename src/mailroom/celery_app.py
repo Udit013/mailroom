@@ -6,7 +6,7 @@ from mailroom.config import settings
 from mailroom.db import dispose_engine_after_fork
 from mailroom.logging_config import configure_logging
 from mailroom.models import Stage
-from mailroom.stages import PIPELINE
+from mailroom.stages import QUEUED_STAGES
 
 _WORK_EXCHANGE = Exchange("mailroom", type="direct")
 _DEAD_EXCHANGE = Exchange("mailroom.dead", type="direct")
@@ -20,8 +20,8 @@ def dead_queue(stage: Stage) -> str:
     return f"{stage_queue(stage)}.dead"
 
 
-WORK_QUEUES = tuple(stage_queue(stage) for stage in PIPELINE)
-DEAD_QUEUES = tuple(dead_queue(stage) for stage in PIPELINE)
+WORK_QUEUES = tuple(stage_queue(stage) for stage in QUEUED_STAGES)
+DEAD_QUEUES = tuple(dead_queue(stage) for stage in QUEUED_STAGES)
 
 _queues = tuple(
     Queue(
@@ -33,9 +33,10 @@ _queues = tuple(
             "x-dead-letter-routing-key": dead_queue(stage),
         },
     )
-    for stage in PIPELINE
+    for stage in QUEUED_STAGES
 ) + tuple(
-    Queue(dead_queue(stage), _DEAD_EXCHANGE, routing_key=dead_queue(stage)) for stage in PIPELINE
+    Queue(dead_queue(stage), _DEAD_EXCHANGE, routing_key=dead_queue(stage))
+    for stage in QUEUED_STAGES
 )
 
 app = Celery("mailroom", broker=settings.broker_url, include=["mailroom.tasks"])
@@ -53,6 +54,10 @@ app.conf.update(
     # A failed task is rejected without requeue, which routes it to the dead-letter queue.
     task_acks_on_failure_or_timeout=False,
     worker_prefetch_multiplier=1,
+    # Undecodable messages go to the dead-letter queue instead of being acked and logged.
+    worker_consumer="mailroom.worker_consumer:DeadLetteringConsumer",
+    # Recycles a child after its task, so a parser's memory growth cannot accumulate.
+    worker_max_memory_per_child=settings.worker_max_memory_kb,
     task_publish_retry=False,
     broker_transport_options={"confirm_publish": True},
     broker_connection_retry_on_startup=True,

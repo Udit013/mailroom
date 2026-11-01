@@ -23,12 +23,17 @@ def store(stream: BinaryIO, tenant_id: uuid.UUID, content_hash: str) -> str:
 
     final_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=final_path.parent, delete=False) as temporary:
-        stream.seek(0)
-        shutil.copyfileobj(stream, temporary)
-        temporary.flush()
-        os.fsync(temporary.fileno())
-    # Rename is atomic, and concurrent writers of the same hash hold identical bytes.
-    os.replace(temporary.name, final_path)
+        try:
+            stream.seek(0)
+            shutil.copyfileobj(stream, temporary)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            # Rename is atomic, and concurrent writers of the same hash hold identical bytes.
+            os.replace(temporary.name, final_path)
+        except BaseException:
+            # A full disk must not leave partial files behind on every retry.
+            Path(temporary.name).unlink(missing_ok=True)
+            raise
     directory = os.open(final_path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)

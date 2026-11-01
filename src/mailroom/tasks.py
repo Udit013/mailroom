@@ -19,7 +19,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mailroom import failpoints, outbox, state_machine
+from mailroom import failpoints, filing, outbox, state_machine
 from mailroom.celery_app import app
 from mailroom.config import settings
 from mailroom.db import session_scope
@@ -36,6 +36,13 @@ STAGE_INPUT_STATES = {
     Stage.CLASSIFY: (State.PROCESSING,),
     Stage.MATCH: (State.PROCESSING,),
     Stage.DECIDE: (State.PROCESSING,),
+    Stage.FILE: (State.READY_TO_FILE,),
+}
+# The audit reason for each stage that moves on to another, and the output worth recording.
+STAGE_AUDIT = {
+    Stage.EXTRACT: ("TEXT_EXTRACTED", ("text_status",)),
+    Stage.CLASSIFY: ("CLASSIFIED", ("document_type", "confidence")),
+    Stage.MATCH: ("MATCHED", ("outcome", "candidates", "confidence", "gap")),
 }
 TRANSIENT_ERRORS = (TransientStageError, OperationalError)
 
@@ -90,14 +97,18 @@ def _finish_pipeline(session: Session, document: Document, output: dict[str, Any
             session,
             document,
             new_state,
-            "DECIDED",
+            "AUTO_MATCHED",
             stage=Stage.FILE,
             matter_id=uuid.UUID(output["matter_id"]),
         )
+        outbox.enqueue(session, document.id, Stage.FILE)
         return
 
     reason = output["review_reason"]
-    _advance(session, document, new_state, "DECIDED", stage=None, review_reason=reason)
+    _advance(session, document, new_state, "REVIEW_REQUESTED", stage=None, review_reason=reason)
+    state_machine.record_event(
+        session, document, actor=ACTOR, reason="REVIEW_OPENED", details={"review_reason": reason}
+    )
     session.execute(
         insert(ReviewItem)
         .values(tenant_id=document.tenant_id, document_id=document.id, reason=reason)
@@ -119,13 +130,21 @@ def _apply_stage(session: Session, document: Document, stage: Stage) -> None:
     if next_stage is None:
         _finish_pipeline(session, document, output)
     else:
-        state_machine.move_to_stage(session, document, next_stage, actor=ACTOR)
+        reason, audited_fields = STAGE_AUDIT[stage]
+        state_machine.move_to_stage(
+            session,
+            document,
+            next_stage,
+            actor=ACTOR,
+            reason=reason,
+            details={field: output[field] for field in audited_fields if field in output},
+        )
         outbox.enqueue(session, document.id, next_stage)
     failpoints.hit(f"{stage.value}.before_commit")
 
 
 def _is_current(document: Document | None, stage: Stage) -> TypeGuard[Document]:
-    """A duplicate or stale message fails this check. FILE has no input state yet."""
+    """A duplicate or stale message fails this check."""
     return (
         document is not None
         and document.state in STAGE_INPUT_STATES.get(stage, ())
@@ -145,13 +164,15 @@ def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
     A document may run a stage only when its stage column equals the message's stage and its
     state is an expected input: EXTRACT accepts QUEUED or PROCESSING, because a redelivery
     after a kill arrives in PROCESSING. CLASSIFY, MATCH and DECIDE accept PROCESSING. FILE
-    has no input state yet.
+    accepts READY_TO_FILE.
 
-    Returns SKIPPED, having written nothing, for anything else, including a missing
-    document. Each skip logs one line with extra fields document_id, stage and state, where
-    state is "MISSING" for a missing document.
+    Returns SKIPPED for anything else, including a missing document. A skip at the first
+    check writes nothing. A skip at the second check leaves that delivery's attempt counted.
+    Each skip logs one line with extra fields document_id, stage and state, where state is
+    "MISSING" for a missing document.
     Returns EXHAUSTED when _begin_attempt() reports that attempts are used up.
-    Returns COMPLETED after _apply_stage() commits.
+    Returns COMPLETED after _apply_stage() commits. FILE runs run_filing_steps() instead,
+    because it calls an external system and must not hold the row lock while it does.
 
     PermanentStageError and TransientStageError from a handler propagate to the caller,
     with the attempt already committed and the stage's work rolled back.
@@ -163,6 +184,13 @@ def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
         if not _begin_attempt(session, document, stage):
             return StageOutcome.EXHAUSTED
 
+    if stage is Stage.FILE:
+        if not filing.run_filing_steps(document_id):
+            with session_scope() as session:
+                return _skip(document_id, stage, session.get(Document, document_id))
+        logger.info("stage completed", extra=_context(document_id, stage))
+        return StageOutcome.COMPLETED
+
     with session_scope() as session:
         # Blocks rather than using NOWAIT: a lock holder may be a stale message that will ack
         # without doing the work, so giving up here could discard the only valid message.
@@ -173,6 +201,7 @@ def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
             return _skip(document_id, stage, document)
         _apply_stage(session, document, stage)
 
+    logger.info("stage completed", extra=_context(document_id, stage))
     return StageOutcome.COMPLETED
 
 
@@ -207,3 +236,11 @@ def process_stage(self: Task, document_id: str, stage: str) -> None:
             raise Reject(exc, requeue=False) from exc
         countdown = settings.retry_base_seconds * 2**retries * random.uniform(1, 1.5)
         raise self.retry(exc=exc, countdown=countdown, max_retries=None) from exc
+    except Exception as exc:
+        # A bug or bad data will fail the same way every time, so retrying only burns attempts.
+        logger.error(
+            "unexpected stage error",
+            extra={**_context(parsed_id, parsed_stage), "error_type": type(exc).__name__},
+        )
+        fail(parsed_id, parsed_stage, "UNEXPECTED_ERROR")
+        raise Reject(exc, requeue=False) from exc

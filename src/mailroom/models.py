@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -38,6 +38,24 @@ class Stage(StrEnum):
     MATCH = "MATCH"
     DECIDE = "DECIDE"
     FILE = "FILE"
+
+
+class FilingStep(StrEnum):
+    CREATE_RECORD = "CREATE_RECORD"
+    ATTACH_DOCUMENT = "ATTACH_DOCUMENT"
+    CONFIRM = "CONFIRM"
+
+
+class DocumentType(StrEnum):
+    COMPLAINT = "COMPLAINT"
+    SUMMONS = "SUMMONS"
+    SUBPOENA = "SUBPOENA"
+    MEDICAL_RECORD = "MEDICAL_RECORD"
+    BILLING_STATEMENT = "BILLING_STATEMENT"
+    CORRESPONDENCE = "CORRESPONDENCE"
+    DISCOVERY_REQUEST = "DISCOVERY_REQUEST"
+    EFILING_NOTICE = "EFILING_NOTICE"
+    OTHER = "OTHER"
 
 
 def _sql_values(enum_type: type[StrEnum]) -> str:
@@ -88,6 +106,11 @@ class Matter(Base):
         UniqueConstraint("tenant_id", "id", name="uq_matters_tenant_id"),
         CheckConstraint("status IN ('OPEN', 'CLOSED')", name="ck_matters_status"),
         Index("ix_matters_tenant_client_name", "tenant_id", "client_name"),
+        Index(
+            "ix_matters_client_name_trgm",
+            text("lower(client_name) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -95,6 +118,7 @@ class Matter(Base):
     matter_number: Mapped[str] = mapped_column(Text)
     client_name: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="OPEN")
+    opened_on: Mapped[date | None] = mapped_column()
     created_at: Mapped[datetime] = _created_at()
     updated_at: Mapped[datetime] = _created_at()
 
@@ -170,6 +194,8 @@ class DocumentEvent(Base):
     actor: Mapped[str] = mapped_column(Text)
     reason: Mapped[str] = mapped_column(Text)
     matter_id: Mapped[uuid.UUID | None] = mapped_column()
+    # Non-sensitive metadata only: field names and codes, never extracted values.
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -183,6 +209,10 @@ class Classification(Base):
         ),
         CheckConstraint(
             "confidence >= 0 AND confidence <= 1", name="ck_classifications_confidence"
+        ),
+        CheckConstraint(
+            f"document_type IN ({_sql_values(DocumentType)})",
+            name="ck_classifications_document_type",
         ),
     )
 
@@ -228,7 +258,13 @@ class FilingAction(Base):
     __tablename__ = "filing_actions"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_filing_actions_idempotency_key"),
-        UniqueConstraint("document_id", name="uq_filing_actions_document_id"),
+        UniqueConstraint("document_id", "step", name="uq_filing_actions_document_step"),
+        CheckConstraint(f"step IN ({_sql_values(FilingStep)})", name="ck_filing_actions_step"),
+        CheckConstraint("status IN ('PENDING', 'COMPLETED')", name="ck_filing_actions_status"),
+        CheckConstraint(
+            "(status = 'COMPLETED') = (reference IS NOT NULL AND completed_at IS NOT NULL)",
+            name="ck_filing_actions_completed",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "document_id"],
             ["documents.tenant_id", "documents.id"],
@@ -247,6 +283,10 @@ class FilingAction(Base):
     document_id: Mapped[uuid.UUID] = mapped_column()
     matter_id: Mapped[uuid.UUID] = mapped_column()
     idempotency_key: Mapped[str] = mapped_column(Text)
+    step: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="PENDING")
+    reference: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -296,6 +336,7 @@ class ReviewItem(Base):
     matter_id: Mapped[uuid.UUID | None] = mapped_column()
     resolved_by: Mapped[str | None] = mapped_column(Text)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    corrections: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -307,7 +348,22 @@ class DmsFiling(Base):
     idempotency_key: Mapped[str] = mapped_column(Text, primary_key=True)
     document_id: Mapped[uuid.UUID] = mapped_column()
     matter_id: Mapped[uuid.UUID] = mapped_column()
+    step: Mapped[str] = mapped_column(Text)
+    reference: Mapped[str] = mapped_column(Text)
     filed_at: Mapped[datetime] = _created_at()
+
+
+class DmsRequest(Base):
+    """The fake system's own request log, so tests can see every call it received."""
+
+    __tablename__ = "dms_requests"
+    __table_args__ = (Index("ix_dms_requests_idempotency_key", "idempotency_key"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    step: Mapped[str] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
 
 
 class Outbox(Base):

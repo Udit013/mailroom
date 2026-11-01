@@ -5,7 +5,7 @@ COMPOSE := docker compose
 # A separate project, because the test suite truncates tables and purges queues.
 TEST_COMPOSE := docker compose -p mailroom-test
 
-.PHONY: up down migrate test lint seed demo
+.PHONY: up down migrate test lint seed demo evaluate web drills
 
 .env:
 	@echo "Missing .env. Run: cp .env.example .env" >&2
@@ -30,6 +30,20 @@ lint: .env
 
 seed: .env
 	$(COMPOSE) run --rm --build --no-deps api python -m mailroom.seed
+
+# Writes the report to docs/EVALUATION.md. It needs no database or broker.
+evaluate: .env
+	$(TEST_COMPOSE) build test
+	$(TEST_COMPOSE) run --rm --no-deps -T test python -m mailroom.evaluation > docs/EVALUATION.md
+
+# Injects real failures into a separate stack and writes the run to docs/DRILLS.md.
+drills: .env
+	python3 scripts/drills.py
+
+# The review page, on http://127.0.0.1:5173. It needs Node, and `make up` for the API.
+web:
+	npm --prefix web ci
+	API_PORT=$(API_PORT) npm --prefix web run dev
 
 demo: up seed
 	@echo "--- GET /healthz"

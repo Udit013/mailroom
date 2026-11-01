@@ -210,6 +210,8 @@ def move_to_stage(
     to_stage: Stage,
     *,
     actor: str,
+    reason: str = "STAGE_COMPLETED",
+    details: dict[str, Any] | None = None,
 ) -> None:
     """Move to the next pipeline stage while remaining in PROCESSING."""
     state = State(document.state)
@@ -244,11 +246,36 @@ def move_to_stage(
             to_state=state.value,
             stage=document.stage,
             actor=actor,
-            reason="STAGE_COMPLETED",
+            reason=reason,
             matter_id=document.matter_id,
+            details=details or {},
         )
     )
 
+    session.flush()
+
+
+def record_event(
+    session: Session,
+    document: Document,
+    *,
+    actor: str,
+    reason: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Audit something that happened without changing state. Details must not be sensitive."""
+    session.add(
+        DocumentEvent(
+            document_id=document.id,
+            from_state=document.state,
+            to_state=document.state,
+            stage=document.stage,
+            actor=actor,
+            reason=reason,
+            matter_id=document.matter_id,
+            details=details or {},
+        )
+    )
     session.flush()
 
 

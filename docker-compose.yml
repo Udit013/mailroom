@@ -8,11 +8,22 @@ x-app: &app
     BROKER_URL: amqp://${RABBITMQ_USER:?copy .env.example to .env}:${RABBITMQ_PASSWORD:?copy .env.example to .env}@rabbitmq:5672//
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
+    FAKE_DMS_FAULTS: ${FAKE_DMS_FAULTS:-}
   depends_on:
     postgres:
       condition: service_healthy
     rabbitmq:
       condition: service_healthy
+
+# Runtime services only: the test container needs a writable filesystem.
+x-hardened: &hardened
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
 
 services:
   postgres:
@@ -30,10 +41,14 @@ services:
       retries: 30
 
   rabbitmq:
-    image: rabbitmq:4.1-management-alpine
+    image: rabbitmq:4.1-alpine
+    # A fixed name, because RabbitMQ keeps its data in a directory named after the host.
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?copy .env.example to .env}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?copy .env.example to .env}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 3s
@@ -41,12 +56,13 @@ services:
       retries: 40
 
   migrate:
-    <<: *app
+    <<: [*app, *hardened]
     command: alembic upgrade head
 
   api:
-    <<: *app
+    <<: [*app, *hardened]
     command: python -m mailroom.api
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
@@ -63,7 +79,7 @@ services:
       retries: 20
 
   relay:
-    <<: *app
+    <<: [*app, *hardened]
     command: python -m mailroom.relay
     # The relay exits rather than stay stuck, so something must start it again.
     restart: unless-stopped
@@ -72,10 +88,11 @@ services:
         condition: service_completed_successfully
 
   worker:
-    <<: *app
+    <<: [*app, *hardened]
+    restart: unless-stopped
     command: >-
       celery --quiet -A mailroom.celery_app worker
-      -Q mailroom.extract,mailroom.classify,mailroom.match,mailroom.decide
+      -Q mailroom.extract,mailroom.classify,mailroom.match,mailroom.decide,mailroom.file
       --concurrency=2
     depends_on:
       migrate:
@@ -88,4 +105,5 @@ services:
 
 volumes:
   postgres-data:
+  rabbitmq-data:
   document-data:

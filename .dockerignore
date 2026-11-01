@@ -1,4 +1,5 @@
 .git
+*.docx
 .env
 .venv
 .pytest_cache
@@ -7,3 +8,4 @@
 .hypothesis
 __pycache__
 *.egg-info
+web

@@ -1,7 +1,4 @@
-"""Tests for run_stage(), which the project owner implements by hand.
-
-Every test here is expected to fail until run_stage() exists.
-"""
+"""Tests for the run_stage() contract."""
 
 import hashlib
 import logging
@@ -143,8 +140,8 @@ def test_message_for_another_stage_is_skipped(
     assert snapshot(document_id) == before
 
 
-@pytest.mark.parametrize("state", list(State))
-def test_file_stage_has_no_input_state_yet(handled, tenant_id, matter_id, state):
+@pytest.mark.parametrize("state", [state for state in State if state != State.READY_TO_FILE])
+def test_file_stage_only_runs_from_ready_to_file(handled, tenant_id, matter_id, state):
     document_id = document_at(state, Stage.FILE, tenant_id, matter_id)
 
     assert run_stage(document_id, Stage.FILE) is StageOutcome.SKIPPED

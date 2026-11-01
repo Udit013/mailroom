@@ -24,8 +24,9 @@ ALLOWED_FIELDS = (
 )
 
 
-# Celery writes exception text into these messages, so only a fixed message is kept.
-UNSAFE_MESSAGE_LOGGERS = ("celery.app.trace",)
+# Celery writes exception text into this logger's messages, so its fixed description of the
+# outcome is kept instead. The message then still says whether the task failed.
+CELERY_TASK_LOGGER = "celery.app.trace"
 
 
 def _describe_exception(
@@ -42,9 +43,19 @@ def _describe_exception(
 
 
 def _safe_message(record: logging.LogRecord) -> str:
-    if record.name in UNSAFE_MESSAGE_LOGGERS:
-        return "task finished"
-    return record.getMessage()
+    if record.name != CELERY_TASK_LOGGER:
+        return record.getMessage()
+    details = record.__dict__.get("data")
+    if isinstance(details, dict):
+        return f"task {details.get('description', 'failed')}"
+    return "task succeeded" if record.levelno < logging.WARNING else "task failed"
+
+
+def _task_id(record: logging.LogRecord) -> str | None:
+    if record.name != CELERY_TASK_LOGGER:
+        return None
+    details = record.__dict__.get("data") or record.args
+    return str(details["id"]) if isinstance(details, dict) and "id" in details else None
 
 
 class JsonFormatter(logging.Formatter):
@@ -55,6 +66,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": _safe_message(record),
         }
+        task_id = _task_id(record)
+        if task_id:
+            entry["task_id"] = task_id
         for field in ALLOWED_FIELDS:
             if field in record.__dict__:
                 entry[field] = str(record.__dict__[field])
@@ -69,3 +83,5 @@ def configure_logging() -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(settings.log_level)
+    # pypdf's warnings quote fragments of the document they are parsing.
+    logging.getLogger("pypdf").setLevel(logging.ERROR)

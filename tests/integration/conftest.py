@@ -39,7 +39,9 @@ def schema(alembic_config):
 @pytest.fixture(autouse=True)
 def clean_state(schema):
     with get_engine().begin() as connection:
-        connection.execute(text("TRUNCATE tenants, dms_filings RESTART IDENTITY CASCADE"))
+        connection.execute(
+            text("TRUNCATE tenants, dms_filings, dms_requests RESTART IDENTITY CASCADE")
+        )
     with app.connection_for_write() as connection:
         for queue in WORK_QUEUES + DEAD_QUEUES:
             connection.default_channel.queue_purge(queue)
@@ -134,7 +136,7 @@ def stage_results(document_id: uuid.UUID) -> list[str]:
 
 
 def full_run_events() -> list[tuple]:
-    """Exactly one audit row per step of a clean run through the stub pipeline."""
+    """Exactly one audit row per step of a clean run that ends in review."""
     return [
         (None, "RECEIVED", None),
         ("RECEIVED", "QUEUED", "EXTRACT"),
@@ -143,6 +145,7 @@ def full_run_events() -> list[tuple]:
         ("PROCESSING", "PROCESSING", "MATCH"),
         ("PROCESSING", "PROCESSING", "DECIDE"),
         ("PROCESSING", "NEEDS_REVIEW", None),
+        ("NEEDS_REVIEW", "NEEDS_REVIEW", None),
     ]
 
 

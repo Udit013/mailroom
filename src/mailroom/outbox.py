@@ -7,8 +7,7 @@ from sqlalchemy.orm import Session
 
 from mailroom.models import Document, Outbox, Stage, State
 
-# READY_TO_FILE joins this list once a filing stage and queue exist.
-RECOVERABLE_STATES = (State.QUEUED, State.PROCESSING)
+RECOVERABLE_STATES = (State.QUEUED, State.PROCESSING, State.READY_TO_FILE)
 
 
 def enqueue(session: Session, document_id: uuid.UUID, stage: Stage) -> None:

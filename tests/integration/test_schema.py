@@ -54,8 +54,8 @@ def add_document(tenant_id: uuid.UUID, content_hash: str = HASH_A, **columns) ->
 
 def add_filing(tenant_id, document_id, matter_id, key: str) -> None:
     run(
-        "INSERT INTO filing_actions (tenant_id, document_id, matter_id, idempotency_key) "
-        "VALUES (:tenant_id, :document_id, :matter_id, :key)",
+        "INSERT INTO filing_actions (tenant_id, document_id, matter_id, idempotency_key, step) "
+        "VALUES (:tenant_id, :document_id, :matter_id, :key, 'CREATE_RECORD')",
         tenant_id=tenant_id,
         document_id=document_id,
         matter_id=matter_id,
@@ -91,7 +91,7 @@ def add_candidate(tenant_id, document_id, matter_id, rank=1, score=0.5) -> None:
 def add_classification(tenant_id, document_id, confidence=0.5) -> None:
     run(
         "INSERT INTO classifications (document_id, tenant_id, document_type, confidence, method) "
-        "VALUES (:document_id, :tenant_id, 'MOTION', :confidence, 'rules-v1')",
+        "VALUES (:document_id, :tenant_id, 'COMPLAINT', :confidence, 'rules-v2')",
         document_id=document_id,
         tenant_id=tenant_id,
         confidence=confidence,
@@ -178,12 +178,12 @@ def test_filing_idempotency_key_is_unique():
         add_filing(tenant_id, add_document(tenant_id, HASH_B), matter_id, "same-key")
 
 
-def test_document_can_only_be_filed_once():
+def test_each_filing_step_exists_once_per_document():
     tenant_id = add_tenant()
     matter_id = add_matter(tenant_id)
     document_id = add_document(tenant_id)
     add_filing(tenant_id, document_id, matter_id, "first")
-    with pytest.raises(IntegrityError, match="uq_filing_actions_document_id"):
+    with pytest.raises(IntegrityError, match="uq_filing_actions_document_step"):
         add_filing(tenant_id, document_id, matter_id, "second")
 
 
@@ -235,6 +235,17 @@ def test_classification_confidence_must_be_a_probability(confidence):
     tenant_id = add_tenant()
     with pytest.raises(IntegrityError, match="ck_classifications_confidence"):
         add_classification(tenant_id, add_document(tenant_id), confidence)
+
+
+def test_unknown_document_type_is_rejected():
+    tenant_id = add_tenant()
+    with pytest.raises(IntegrityError, match="ck_classifications_document_type"):
+        run(
+            "INSERT INTO classifications (document_id, tenant_id, document_type, confidence, "
+            "method) VALUES (:document_id, :tenant_id, 'MOTION', 0.5, 'rules-v2')",
+            document_id=add_document(tenant_id),
+            tenant_id=tenant_id,
+        )
 
 
 def test_document_has_at_most_one_classification():
@@ -338,6 +349,20 @@ def test_no_match_review_item_cannot_carry_a_matter():
             resolved_by="reviewer",
             resolved_at="2026-10-31T00:00:00Z",
         )
+
+
+def test_completed_filing_step_needs_a_reference():
+    tenant_id = add_tenant()
+    add_filing(tenant_id, add_document(tenant_id), add_matter(tenant_id), "key")
+    with pytest.raises(IntegrityError, match="ck_filing_actions_completed"):
+        run("UPDATE filing_actions SET status = 'COMPLETED', completed_at = now()")
+
+
+def test_unknown_filing_step_is_rejected():
+    tenant_id = add_tenant()
+    add_filing(tenant_id, add_document(tenant_id), add_matter(tenant_id), "key")
+    with pytest.raises(IntegrityError, match="ck_filing_actions_step"):
+        run("UPDATE filing_actions SET step = 'GUESS'")
 
 
 def test_models_match_migrations(alembic_config):

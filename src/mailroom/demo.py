@@ -14,13 +14,18 @@ from mailroom.models import ApiKey, Tenant
 from mailroom.seed import TENANT_NAME
 
 API_URL = "http://127.0.0.1:8000"
-SAMPLES = {
+SAMPLES: dict[str, bytes] = {
     "Number and client agree": (
-        "Motion to dismiss.\nMatter: FIC-2026-001\nClient: Aldermere Holdings"
+        b"Complaint for damages.\nCase No. FIC-2026-001\nClient: Aldermere Holdings"
     ),
-    "Client has two matters": "Motion to dismiss.\nClient: Brightwater Cooperative",
-    "No known matter": "Motion to dismiss.\nClient: Nobody Known",
-    "Unclassifiable": "Synthetic filler text.",
+    "Client has two matters": b"Complaint for damages.\nClient: Brightwater Cooperative",
+    "Two matters named": (
+        b"Complaint for damages.\nCase No. FIC-2026-001\nCase No. FIC-2026-002\n"
+        b"Client: Aldermere Holdings"
+    ),
+    "No known matter": b"Complaint for damages.\nClient: Nobody Known",
+    "Unclassifiable": b"Synthetic filler text.",
+    "Corrupt PDF": b"%PDF-1.4\nthis file is damaged",
 }
 
 
@@ -36,22 +41,22 @@ def _request(
         return result
 
 
-def _upload(text: str, api_key: str) -> str:
-    # A unique line, so a repeat demo is not treated as a duplicate upload.
-    content = f"{text}\nDemo run: {uuid.uuid4()}\n"
+def _upload(content: bytes, api_key: str) -> tuple[str, bool]:
     boundary = uuid.uuid4().hex
     body = (
         f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="demo.txt"\r\n'
-        f"Content-Type: text/plain\r\n\r\n{content}\r\n--{boundary}--\r\n"
+        "Content-Type: application/octet-stream\r\n\r\n"
     ).encode()
-    return str(_request("/documents", api_key, body, boundary)["id"])
+    body += content + f"\r\n--{boundary}--\r\n".encode()
+    result = _request("/documents", api_key, body, boundary)
+    return str(result["id"]), bool(result["duplicate"])
 
 
 def _wait_for_result(document_id: str, api_key: str) -> dict[str, Any]:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         document = _request(f"/documents/{document_id}", api_key)
-        if document["state"] not in ("QUEUED", "PROCESSING"):
+        if document["state"] not in ("QUEUED", "PROCESSING", "READY_TO_FILE"):
             return document
         time.sleep(0.1)
     raise TimeoutError(document_id)
@@ -69,11 +74,18 @@ def main() -> None:
         )
         session.add(key)
 
+    run = f"\nDemo run: {uuid.uuid4()}\n".encode()
     try:
-        for label, text in SAMPLES.items():
-            result = _wait_for_result(_upload(text, raw_key), raw_key)
+        for label, sample in SAMPLES.items():
+            # A unique line, so a repeat demo is not treated as a duplicate upload.
+            document_id, _ = _upload(sample + run, raw_key)
+            result = _wait_for_result(document_id, raw_key)
             detail = result["review_reason"] or result["failure_code"] or "-"
             print(f"{label:<26} {result['state']:<14} {detail}")
+
+        first_sample = next(iter(SAMPLES.values()))
+        _, duplicate = _upload(first_sample + run, raw_key)
+        print(f"{'Same file again':<26} {'duplicate' if duplicate else 'NEW':<14} no new workflow")
     finally:
         with session_scope() as session:
             session.execute(

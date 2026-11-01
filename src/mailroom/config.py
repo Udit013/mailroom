@@ -14,8 +14,20 @@ class Settings:
     database_url: str = _required("DATABASE_URL")
     broker_url: str = _required("BROKER_URL")
     log_level: str = os.environ.get("LOG_LEVEL", "INFO")
+    api_docs_enabled: bool = os.environ.get("API_DOCS_ENABLED", "false").lower() == "true"
+    api_concurrency_limit: int = int(os.environ.get("API_CONCURRENCY_LIMIT", "100"))
+    db_connect_timeout_seconds: int = int(os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "5"))
+    # Shorter than the stage time limit, so a stuck lock wait fails as a retry, not a kill.
+    db_statement_timeout_ms: int = int(os.environ.get("DB_STATEMENT_TIMEOUT_MS", "30000"))
+    # Longer than the stage time limit, because a handler runs inside an open transaction.
+    db_idle_transaction_timeout_ms: int = int(
+        os.environ.get("DB_IDLE_TRANSACTION_TIMEOUT_MS", "120000")
+    )
     storage_dir: str = os.environ.get("STORAGE_DIR", "/data/documents")
     max_upload_bytes: int = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+    max_pdf_pages: int = int(os.environ.get("MAX_PDF_PAGES", "200"))
+    max_text_chars: int = int(os.environ.get("MAX_TEXT_CHARS", "2000000"))
+    worker_max_memory_kb: int = int(os.environ.get("WORKER_MAX_MEMORY_KB", "512000"))
     publish_confirm_timeout_seconds: float = float(
         os.environ.get("PUBLISH_CONFIRM_TIMEOUT_SECONDS", "5")
     )

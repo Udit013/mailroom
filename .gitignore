@@ -7,3 +7,5 @@ __pycache__/
 .mypy_cache/
 .hypothesis/
 Mailroom_3-Day_Plan_and_Prompts.docx
+node_modules/
+web/dist/
