@@ -84,7 +84,8 @@ needs Python 3 on the host. Everything else runs in containers.
    make down
    ```
 
-A guided walkthrough with exact commands is in [docs/DEMO.md](docs/DEMO.md).
+A guided walkthrough with exact commands is in [docs/DEMO.md](docs/DEMO.md). To host a
+synthetic-data demo on a single VM, see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Commands
 

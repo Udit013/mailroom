@@ -1,4 +1,4 @@
-# Local development only. Credentials come from .env, which is gitignored.
+# Local development and a single-host demo. Credentials come from .env, which is gitignored.
 x-app: &app
   build: .
   volumes:
@@ -28,6 +28,8 @@ x-hardened: &hardened
 services:
   postgres:
     image: postgres:16-alpine
+    # Without this, a reboot leaves the database down and everything else waiting for it.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?copy .env.example to .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?copy .env.example to .env}
@@ -42,6 +44,7 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.1-alpine
+    restart: unless-stopped
     # A fixed name, because RabbitMQ keeps its data in a directory named after the host.
     hostname: rabbitmq
     environment:
