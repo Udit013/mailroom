@@ -1,3 +1,6 @@
+import ssl
+from typing import Any
+
 from celery import Celery
 from celery.signals import setup_logging, worker_init, worker_process_init
 from kombu import Exchange, Queue
@@ -18,6 +21,18 @@ def stage_queue(stage: Stage) -> str:
 
 def dead_queue(stage: Stage) -> str:
     return f"{stage_queue(stage)}.dead"
+
+
+def broker_ssl(url: str) -> dict[str, Any] | None:
+    """TLS options for an amqps:// URL that check the certificate and the host name.
+
+    With a bare amqps:// URL, py-amqp verifies the certificate chain but not the host name,
+    because kombu only fills in the server name when the options are a dict. A fresh dict each
+    time, because kombu writes the host name into it.
+    """
+    if not url.startswith("amqps://"):
+        return None
+    return {"cert_reqs": ssl.CERT_REQUIRED, "server_hostname": None}
 
 
 WORK_QUEUES = tuple(stage_queue(stage) for stage in QUEUED_STAGES)
@@ -60,6 +75,7 @@ app.conf.update(
     worker_max_memory_per_child=settings.worker_max_memory_kb,
     task_publish_retry=False,
     broker_transport_options={"confirm_publish": True},
+    broker_use_ssl=broker_ssl(settings.broker_url),
     broker_connection_retry_on_startup=True,
     # Hard limit only. A soft limit raises inside psycopg calls and leaves the connection busy,
     # whereas a kill lets Postgres roll back, and the sweeper recovers the document.

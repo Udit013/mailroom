@@ -6,7 +6,7 @@ import pytest
 from conftest import events, load, new_document, stage_results, wait_until, work_depth
 from fastapi.testclient import TestClient
 from pdf_builder import blank_pdf, encrypted_pdf, text_pdf
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from test_upload import add_key
 
 from mailroom.api import app
@@ -15,6 +15,7 @@ from mailroom.models import (
     Classification,
     DmsFiling,
     Document,
+    DocumentBlob,
     FilingAction,
     MatchCandidate,
     Matter,
@@ -237,7 +238,7 @@ def test_worker_killed_mid_stage_is_redelivered_with_one_outcome(
 def test_missing_file_fails_permanently_with_a_reason(services, tenant_id):
     document_id = new_document(tenant_id)
     with session_scope() as session:
-        session.get_one(Document, document_id).storage_path = f"{tenant_id}/{'0' * 64}"
+        session.execute(delete(DocumentBlob).where(DocumentBlob.tenant_id == tenant_id))
     relay, worker = services.relay(), services.worker()
 
     wait_until(lambda: finished(document_id), what="FAILED")

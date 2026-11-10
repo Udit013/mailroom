@@ -1,6 +1,7 @@
 # Local development and a single-host demo. Credentials come from .env, which is gitignored.
 x-app: &app
   build: .
+  # Only for make backfill-blobs: document bytes now live in Postgres.
   volumes:
     - document-data:/data/documents
   environment: &app-environment

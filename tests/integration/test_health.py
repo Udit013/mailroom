@@ -161,3 +161,9 @@ def test_readyz_checks_again_once_the_cached_result_expires(client, monkeypatch)
     client.get("/readyz")
 
     assert calls.count("postgres") == 2
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/readyz", "/reviews"])
+def test_no_response_may_be_cached(client, path):
+    """Including errors: a cached 401 or 503 would be served to the next caller."""
+    assert client.get(path).headers["Cache-Control"] == "no-store"

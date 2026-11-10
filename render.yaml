@@ -1,0 +1,40 @@
+# Render Blueprint: the API, relay and worker in one free web service, run by
+# mailroom.supervisor. Postgres is on Neon and RabbitMQ on CloudAMQP. Secrets are marked
+# sync: false, so Render asks for them once and they never live in this file.
+services:
+  - type: web
+    name: mailroom-api
+    runtime: docker
+    plan: free
+    # Pick the region nearest your Neon and CloudAMQP regions.
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerCommand: python -m mailroom.supervisor
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BROKER_URL
+        sync: false
+      # Small files only: bytes are stored in a 1 GB database.
+      - key: MAX_UPLOAD_BYTES
+        value: "1048576"
+      - key: MAX_PDF_PAGES
+        value: "100"
+      # Uploads are refused before Neon's 1 GB cap, where every write would start failing.
+      - key: MAX_DATABASE_BYTES
+        value: "700000000"
+      # Slower polling keeps outbound traffic and Neon compute use low.
+      - key: RELAY_POLL_SECONDS
+        value: "2"
+      - key: WORKER_CONCURRENCY
+        value: "1"
+      - key: LOG_LEVEL
+        value: INFO
+      # Optional model advisor, off unless you set ADVISOR=gemini. See README.md first.
+      - key: ADVISOR
+        value: ""
+      - key: ADVISOR_SYNTHETIC_DATA_ONLY
+        value: "false"
+      - key: GEMINI_API_KEY
+        sync: false

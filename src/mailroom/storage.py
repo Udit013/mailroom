@@ -1,46 +1,63 @@
-"""Content-addressed file storage on a shared volume.
+"""Content-addressed document storage in Postgres.
 
-The path comes only from the tenant id and the hash, so a client's filename never touches
-the filesystem. A file is complete before any row refers to it, so a crash can leave an
-unreferenced file but never a row pointing at nothing.
+The bytes are written in the caller's transaction, together with the document row, so a
+document can never exist without its content and a failed upload leaves nothing behind.
+Hosted services such as Render have no persistent disk, which is why the bytes are not kept
+on a filesystem. Content is shared only within a tenant: the key includes the tenant, so one
+tenant can never learn whether another holds the same file.
 """
 
-import os
-import shutil
-import tempfile
 import uuid
-from pathlib import Path
 from typing import BinaryIO
 
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
+
 from mailroom.config import settings
+from mailroom.models import DocumentBlob
 
 
-def store(stream: BinaryIO, tenant_id: uuid.UUID, content_hash: str) -> str:
-    relative_path = f"{tenant_id}/{content_hash}"
-    final_path = Path(settings.storage_dir) / relative_path
-    if final_path.exists():
-        return relative_path
-
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=final_path.parent, delete=False) as temporary:
-        try:
-            stream.seek(0)
-            shutil.copyfileobj(stream, temporary)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            # Rename is atomic, and concurrent writers of the same hash hold identical bytes.
-            os.replace(temporary.name, final_path)
-        except BaseException:
-            # A full disk must not leave partial files behind on every retry.
-            Path(temporary.name).unlink(missing_ok=True)
-            raise
-    directory = os.open(final_path.parent, os.O_RDONLY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-    return relative_path
+class ContentMissing(LookupError):
+    pass
 
 
-def read(relative_path: str) -> bytes:
-    return (Path(settings.storage_dir) / relative_path).read_bytes()
+class StorageFull(Exception):
+    """The database is near the size limit set for it, so new uploads are refused."""
+
+
+def check_capacity(session: Session) -> None:
+    """A soft limit below the provider's hard cap, where every write would start failing."""
+    if settings.max_database_bytes <= 0:
+        return
+    used = session.scalar(select(func.pg_database_size(func.current_database())))
+    if used is not None and used >= settings.max_database_bytes:
+        raise StorageFull
+
+
+def store(session: Session, tenant_id: uuid.UUID, content_hash: str, stream: BinaryIO) -> str:
+    """Stores the content unless the tenant already holds it. Returns the storage key."""
+    stream.seek(0)
+    content = stream.read()
+    session.execute(
+        insert(DocumentBlob)
+        .values(
+            tenant_id=tenant_id,
+            content_hash=content_hash,
+            content=content,
+            size_bytes=len(content),
+        )
+        .on_conflict_do_nothing(index_elements=["tenant_id", "content_hash"])
+    )
+    return f"{tenant_id}/{content_hash}"
+
+
+def read(session: Session, tenant_id: uuid.UUID, content_hash: str) -> bytes:
+    content = session.scalar(
+        select(DocumentBlob.content).where(
+            DocumentBlob.tenant_id == tenant_id, DocumentBlob.content_hash == content_hash
+        )
+    )
+    if content is None:
+        raise ContentMissing
+    return bytes(content)

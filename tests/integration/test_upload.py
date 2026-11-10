@@ -2,7 +2,6 @@ import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from pathlib import Path
 
 import pytest
 from conftest import events, wait_until
@@ -10,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from mailroom import ingest
+from mailroom import ingest, storage
 from mailroom.api import UploadSizeLimit, app
 from mailroom.api_keys import generate_api_key, hash_api_key, key_prefix
 from mailroom.config import settings
@@ -94,7 +93,8 @@ def test_file_is_stored_by_hash_outside_the_client_filename(client, api_key, ten
 
     document = stored_document(response.json()["id"])
     assert document.storage_path == f"{tenant_id}/{document.content_hash}"
-    assert (Path(settings.storage_dir) / document.storage_path).read_bytes() == TEXT
+    with session_scope() as session:
+        assert storage.read(session, tenant_id, document.content_hash) == TEXT
     assert document.original_filename == "passwd"
     assert document.size_bytes == len(TEXT)
 

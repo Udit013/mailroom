@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    LargeBinary,
     Numeric,
     Text,
     UniqueConstraint,
@@ -196,6 +197,19 @@ class DocumentEvent(Base):
     matter_id: Mapped[uuid.UUID | None] = mapped_column()
     # Non-sensitive metadata only: field names and codes, never extracted values.
     details: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class DocumentBlob(Base):
+    """A document's bytes, stored once per tenant and content hash."""
+
+    __tablename__ = "document_blobs"
+    __table_args__ = (CheckConstraint("size_bytes >= 0", name="ck_document_blobs_size_bytes"),)
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), primary_key=True)
+    content_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = _created_at()
 
 

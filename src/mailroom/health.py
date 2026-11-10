@@ -14,6 +14,7 @@ import psycopg
 from kombu import Connection
 from sqlalchemy.engine import make_url
 
+from mailroom.celery_app import broker_ssl
 from mailroom.config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,9 @@ def check_postgres(url: str = settings.database_url) -> None:
 
 
 def check_rabbitmq(url: str = settings.broker_url) -> None:
-    with Connection(url, connect_timeout=_DRIVER_TIMEOUT_SECONDS) as connection:
+    with Connection(
+        url, connect_timeout=_DRIVER_TIMEOUT_SECONDS, ssl=broker_ssl(url) or False
+    ) as connection:
         # No internal retries: a refused connection should report at once, not at the deadline.
         connection.ensure_connection(max_retries=0)
 

@@ -25,7 +25,11 @@ class Settings:
     db_idle_transaction_timeout_ms: int = int(
         os.environ.get("DB_IDLE_TRANSACTION_TIMEOUT_MS", "120000")
     )
+    # Only for copying files from the old shared volume, see mailroom.backfill_blobs.
     storage_dir: str = os.environ.get("STORAGE_DIR", "/data/documents")
+    # Uploads are refused with 507 above this database size. 0 turns the check off. Set it
+    # below a hosted plan's hard cap, where inserts, updates and deletes all start failing.
+    max_database_bytes: int = int(os.environ.get("MAX_DATABASE_BYTES", "0"))
     max_upload_bytes: int = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     max_pdf_pages: int = int(os.environ.get("MAX_PDF_PAGES", "200"))
     max_text_chars: int = int(os.environ.get("MAX_TEXT_CHARS", "2000000"))
@@ -46,6 +50,14 @@ class Settings:
     readiness_timeout_seconds: float = float(os.environ.get("READINESS_TIMEOUT_SECONDS", "2"))
     # /readyz is public, so callers share one result instead of each opening connections.
     readiness_cache_seconds: float = float(os.environ.get("READINESS_CACHE_SECONDS", "5"))
+    # Only used by mailroom.supervisor, for hosts that run everything in one container.
+    worker_concurrency: int = int(os.environ.get("WORKER_CONCURRENCY", "1"))
+    supervisor_max_restarts: int = int(os.environ.get("SUPERVISOR_MAX_RESTARTS", "5"))
+    supervisor_window_seconds: float = float(os.environ.get("SUPERVISOR_WINDOW_SECONDS", "300"))
+    # Below the platform's grace period before SIGKILL, which is 30 seconds on Render.
+    supervisor_shutdown_seconds: float = float(
+        os.environ.get("SUPERVISOR_SHUTDOWN_SECONDS", "25")
+    )
     # The optional model second opinion. See mailroom/advisor.py before enabling it.
     advisor: str = os.environ.get("ADVISOR", "")
     advisor_synthetic_data_only: bool = (

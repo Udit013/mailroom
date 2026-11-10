@@ -3,23 +3,21 @@
 import asyncio
 import io
 import uuid
-from pathlib import Path
 
 import pytest
 from conftest import dead_depth, load, new_document, wait_until, work_depth
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from kombu import Producer
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 
-from mailroom import storage
+from mailroom import ingest
 from mailroom.api import UploadSizeLimit, app
 from mailroom.celery_app import app as celery_app
 from mailroom.celery_app import dead_queue, stage_queue
-from mailroom.config import settings
 from mailroom.db import get_engine, session_scope
-from mailroom.models import Document, Stage, State
+from mailroom.models import Document, DocumentBlob, Stage, State
 
 
 def raw_publish(body: bytes, content_type: str, headers: dict | None = None) -> None:
@@ -64,11 +62,9 @@ def test_nul_byte_in_a_pdf_cannot_poison_the_pipeline(services, tenant_id):
 
 
 def test_unexpected_error_fails_once_with_a_reason(services, tenant_id):
-    """A directory as the path makes the read raise something no stage expects."""
+    """An injected RuntimeError stands for something no stage expects."""
     document_id = new_document(tenant_id)
-    with session_scope() as session:
-        session.get_one(Document, document_id).storage_path = str(tenant_id)
-    relay, worker = services.relay(), services.worker()
+    relay, worker = services.relay(), services.worker(failpoint="EXTRACT.before_commit:error")
 
     wait_until(lambda: load(document_id).state == State.FAILED, what="FAILED")
     wait_until(lambda: dead_depth() == 1, what="dead letter")
@@ -129,18 +125,16 @@ def test_declared_oversized_body_is_refused_before_anything_is_stored():
     assert caught.value.status_code == 413
 
 
-def test_failed_store_leaves_no_partial_file(tenant_id, monkeypatch):
-    def full_disk(source, destination):
-        destination.write(b"partial")
-        raise OSError("disk full")
+def test_failed_upload_leaves_neither_bytes_nor_a_document(tenant_id, monkeypatch, tmp_path):
+    monkeypatch.setenv("MAILROOM_FAILPOINT", "ingest.before_commit:error")
+    monkeypatch.setenv("MAILROOM_FAILPOINT_DIR", str(tmp_path))
 
-    monkeypatch.setattr("mailroom.storage.shutil.copyfileobj", full_disk)
+    with pytest.raises(RuntimeError, match="injected"):
+        ingest.ingest(tenant_id, io.BytesIO(b"Synthetic text"), "a.txt")
 
-    with pytest.raises(OSError, match="disk full"):
-        storage.store(io.BytesIO(b"data"), tenant_id, "a" * 64)
-
-    directory = Path(settings.storage_dir) / str(tenant_id)
-    assert list(directory.iterdir()) == []
+    with session_scope() as session:
+        assert session.scalar(select(func.count()).select_from(DocumentBlob)) == 0
+        assert session.scalar(select(func.count()).select_from(Document)) == 0
 
 
 def test_runaway_statement_is_cancelled_by_the_server():

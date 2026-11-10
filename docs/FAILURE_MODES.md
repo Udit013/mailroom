@@ -16,6 +16,9 @@ but has not been exercised.
 | Relay killed after publishing, before commit | The row stays unpublished, so the message is sent twice and the duplicate does nothing | Automatic | Test |
 | Relay stuck on a broker that stopped mid-frame | The pass deadline ends the process, and rows stay unpublished | Automatic restart | Test for the exit, and separately for restart. Not both together |
 | API process exits | Uploads fail until it restarts, and nothing committed is lost | `restart: unless-stopped` | Reasoned |
+| Relay or worker exits in the hosted container | The supervisor starts it again, waiting longer each time, and stops the container after 5 restarts in 5 minutes | Automatic, then the platform restarts the container | Test |
+| API exits in the hosted container | The supervisor stops everything and exits, so the platform restarts the container | Automatic | Test |
+| Platform sends SIGTERM | Relay, then worker, then API are stopped within 25 seconds; anything left is killed and recovered on the next start | Automatic | Test for the stop. Recovery after a kill is covered by the crash tests |
 
 ## RabbitMQ
 

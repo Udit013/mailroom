@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 import uvicorn
@@ -7,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers, UploadFile
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from mailroom import health, ingest, review
+from mailroom import health, ingest, review, storage
 from mailroom.auth import Principal, require_principal
 from mailroom.config import settings
 from mailroom.db import session_scope
@@ -74,6 +75,19 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def no_store(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Every response is per tenant or live state, so no proxy or browser may keep a copy.
+
+    The review page reaches the API through a hosting proxy that can cache responses.
+    """
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     """The process is alive. Touches no dependency, so an outage can't cause a restart loop."""
@@ -106,6 +120,10 @@ async def upload_document(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "File is empty") from exc
         except ingest.UploadTooLarge as exc:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "File too large") from exc
+        except storage.StorageFull as exc:
+            raise HTTPException(
+                status.HTTP_507_INSUFFICIENT_STORAGE, "Storage is full, try again later"
+            ) from exc
         except ingest.UnsupportedContent as exc:
             raise HTTPException(
                 status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Only PDF and plain text are accepted"

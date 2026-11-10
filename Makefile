@@ -5,7 +5,7 @@ COMPOSE := docker compose
 # A separate project, because the test suite truncates tables and purges queues.
 TEST_COMPOSE := docker compose -p mailroom-test
 
-.PHONY: up down migrate test lint seed demo evaluate evaluate-advisor web drills
+.PHONY: up down migrate test lint seed demo evaluate evaluate-advisor web drills backfill-blobs
 
 .env:
 	@echo "Missing .env. Run: cp .env.example .env" >&2
@@ -27,6 +27,10 @@ test: .env
 
 lint: .env
 	$(TEST_COMPOSE) run --rm --build --no-deps test sh -c "ruff check . && mypy"
+
+# Copies document files from the old shared volume into Postgres. Safe to repeat.
+backfill-blobs: .env
+	$(COMPOSE) run --rm --build api python -m mailroom.backfill_blobs
 
 seed: .env
 	$(COMPOSE) run --rm --build --no-deps api python -m mailroom.seed

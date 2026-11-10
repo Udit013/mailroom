@@ -113,6 +113,7 @@ def test_report_lists_why_documents_went_unanswered():
 
 def test_module_never_sends_anything_without_a_configured_advisor(monkeypatch):
     monkeypatch.setattr(advisor_evaluation.advisor, "from_settings", lambda: None)
+    monkeypatch.setattr("sys.argv", ["advisor_evaluation"])
 
     try:
         advisor_evaluation.main()

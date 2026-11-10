@@ -18,13 +18,11 @@ React page. PostgreSQL is the source of truth. RabbitMQ carries only a document 
 ```mermaid
 flowchart LR
     client[Client or review page] --> api[FastAPI]
-    api --> db[(PostgreSQL)]
-    api --> files[(File storage)]
+    api --> db[(PostgreSQL: state and document bytes)]
     db -- outbox --> relay[Relay and sweeper]
     relay -- id and stage --> mq[[RabbitMQ]]
     mq --> worker[Celery worker]
     worker --> db
-    worker --> files
     worker --> dms[Fake practice-management system]
     mq -- after retries --> dlq[[Dead-letter queues]]
 ```
@@ -85,7 +83,8 @@ needs Python 3 on the host. Everything else runs in containers.
    ```
 
 A guided walkthrough with exact commands is in [docs/DEMO.md](docs/DEMO.md). To host a
-synthetic-data demo on a single VM, see [docs/DEPLOY.md](docs/DEPLOY.md).
+synthetic-data demo on free services (Vercel, Render, Neon and CloudAMQP), see
+[docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Commands
 
@@ -102,6 +101,7 @@ synthetic-data demo on a single VM, see [docs/DEPLOY.md](docs/DEPLOY.md).
 | `make evaluate` | Regenerate [docs/EVALUATION.md](docs/EVALUATION.md) from a fixed seed |
 | `make evaluate-advisor` | Measure the optional model advisor on the same synthetic documents |
 | `make drills` | Inject real failures and write [docs/DRILLS.md](docs/DRILLS.md) |
+| `make backfill-blobs` | Copy files uploaded before document bytes moved into Postgres. Safe to repeat |
 
 To delete local data as well:
 
@@ -249,7 +249,8 @@ dashboards, a load test and multi-document splitting.
 - The classifier and thresholds are measured on synthetic data, so real accuracy is unknown.
 - A corrected case number is stored and audited, but the document is not matched again.
 - The review page shows the oldest 50 items, with no paging.
-- It runs on one host, with files on a shared Docker volume.
+- Document bytes are stored in Postgres, which suits small synthetic files. Large volumes
+  would belong in object storage.
 
 Security assumptions and accepted risks are in [docs/SECURITY.md](docs/SECURITY.md), and the main
 decisions are recorded in [docs/adr](docs/adr).

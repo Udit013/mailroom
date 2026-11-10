@@ -52,10 +52,10 @@ UNREADABLE_REASONS = {
 }
 
 
-def _read_text(document: Document) -> ExtractedText:
+def _read_text(session: Session, document: Document) -> ExtractedText:
     try:
-        raw = storage.read(document.storage_path)
-    except FileNotFoundError as exc:
+        raw = storage.read(session, document.tenant_id, document.content_hash)
+    except storage.ContentMissing as exc:
         raise PermanentStageError("FILE_MISSING") from exc
     return extract_text(raw, document.mime_type)
 
@@ -73,11 +73,11 @@ def _stored_text(session: Session, document: Document) -> str:
     if stored is not None:
         return stored.text
     # Extracted before text was stored, so parse the file again.
-    return _read_text(document).text
+    return _read_text(session, document).text
 
 
 def extract(session: Session, document: Document) -> dict[str, Any]:
-    result = _read_text(document)
+    result = _read_text(session, document)
     if result.status is not TextStatus.OK:
         return {"text_status": result.status.value}
     session.execute(

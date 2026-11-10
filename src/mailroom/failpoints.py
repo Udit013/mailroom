@@ -32,3 +32,5 @@ def hit(name: str) -> None:
         raise TransientStageError(os.environ.get("MAILROOM_FAILPOINT_MESSAGE", name))
     elif action == "permanent":
         raise PermanentStageError("INJECTED")
+    elif action == "error":
+        raise RuntimeError(f"injected failure at {name}")

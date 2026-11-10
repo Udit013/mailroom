@@ -92,9 +92,11 @@ def clean_filename(filename: str | None) -> str:
 
 def ingest(tenant_id: uuid.UUID, stream: BinaryIO, filename: str | None) -> IngestResult:
     inspected = inspect(stream)
-    storage_path = storage.store(stream, tenant_id, inspected.content_hash)
 
     with session_scope() as session:
+        storage.check_capacity(session)
+        # Same transaction as the document, so neither can exist without the other.
+        storage_path = storage.store(session, tenant_id, inspected.content_hash, stream)
         document_id = state_machine.create_document(
             session,
             tenant_id=tenant_id,

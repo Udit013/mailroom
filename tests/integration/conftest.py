@@ -87,8 +87,8 @@ def new_document(tenant_id: uuid.UUID, content: bytes | None = None) -> uuid.UUI
     """The ingestion transaction, skipping the API. Default content goes to NEEDS_REVIEW."""
     content = content or f"Synthetic filler {uuid.uuid4().hex}".encode()
     content_hash = hashlib.sha256(content).hexdigest()
-    storage_path = storage.store(io.BytesIO(content), tenant_id, content_hash)
     with session_scope() as session:
+        storage_path = storage.store(session, tenant_id, content_hash, io.BytesIO(content))
         document_id = state_machine.create_document(
             session,
             tenant_id=tenant_id,
