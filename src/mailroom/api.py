@@ -82,7 +82,7 @@ def healthz() -> dict[str, str]:
 
 @app.get("/readyz")
 async def readyz(response: Response) -> dict[str, object]:
-    checks = await health.run_checks()
+    checks = await health.cached_checks()
     ready = all(result == "ok" for result in checks.values())
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=settings.port,
         log_config=None,
         limit_concurrency=settings.api_concurrency_limit,
     )

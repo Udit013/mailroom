@@ -153,3 +153,24 @@ def test_idle_relay_outlives_its_deadline(services, tenant_id):
     assert relay.popen.poll() is None
     document_id = new_document(tenant_id)
     wait_until(lambda: published_at(document_id) is not None, what="publish")
+
+
+def test_relay_recreates_a_queue_the_broker_deleted(services, tenant_id, restore_queue):
+    """A hosted broker can delete an idle queue under a running relay.
+
+    The failed publish replaces the connection, and the new one declares the queue again.
+    """
+    services.relay()
+    first = new_document(tenant_id)
+    wait_until(lambda: published_at(first) is not None, what="first publish")
+    with app.connection_for_write() as connection:
+        connection.default_channel.queue_delete(stage_queue(Stage.EXTRACT))
+
+    second = new_document(tenant_id)
+
+    wait_until(lambda: published_at(second) is not None, what="publish after the queue was deleted")
+    with app.connection_for_read() as connection:
+        queue = connection.default_channel.queue_declare(
+            stage_queue(Stage.EXTRACT), passive=True
+        )
+    assert queue.message_count == 1

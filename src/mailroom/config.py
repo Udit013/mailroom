@@ -16,6 +16,8 @@ class Settings:
     log_level: str = os.environ.get("LOG_LEVEL", "INFO")
     api_docs_enabled: bool = os.environ.get("API_DOCS_ENABLED", "false").lower() == "true"
     api_concurrency_limit: int = int(os.environ.get("API_CONCURRENCY_LIMIT", "100"))
+    # Hosting platforms such as Render choose the port and pass it in PORT.
+    port: int = int(os.environ.get("PORT", "8000"))
     db_connect_timeout_seconds: int = int(os.environ.get("DB_CONNECT_TIMEOUT_SECONDS", "5"))
     # Shorter than the stage time limit, so a stuck lock wait fails as a retry, not a kill.
     db_statement_timeout_ms: int = int(os.environ.get("DB_STATEMENT_TIMEOUT_MS", "30000"))
@@ -42,6 +44,8 @@ class Settings:
     sweep_interval_seconds: float = float(os.environ.get("SWEEP_INTERVAL_SECONDS", "30"))
     sweep_idle_seconds: float = float(os.environ.get("SWEEP_IDLE_SECONDS", "120"))
     readiness_timeout_seconds: float = float(os.environ.get("READINESS_TIMEOUT_SECONDS", "2"))
+    # /readyz is public, so callers share one result instead of each opening connections.
+    readiness_cache_seconds: float = float(os.environ.get("READINESS_CACHE_SECONDS", "5"))
 
 
 settings = Settings()

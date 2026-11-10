@@ -93,10 +93,13 @@ services:
   worker:
     <<: [*app, *hardened]
     restart: unless-stopped
+    # Gossip, mingle and heartbeat events only add broker traffic, which a hosted broker
+    # counts against its message quota. Nothing here uses them.
     command: >-
       celery --quiet -A mailroom.celery_app worker
       -Q mailroom.extract,mailroom.classify,mailroom.match,mailroom.decide,mailroom.file
       --concurrency=2
+      --without-gossip --without-mingle --without-heartbeat
     depends_on:
       migrate:
         condition: service_completed_successfully

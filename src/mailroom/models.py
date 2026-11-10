@@ -199,6 +199,24 @@ class DocumentEvent(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class DocumentText(Base):
+    """Text from EXTRACT, kept so later stages don't parse the file again."""
+
+    __tablename__ = "document_texts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "document_id"],
+            ["documents.tenant_id", "documents.id"],
+            name="fk_document_texts_tenant_document",
+        ),
+    )
+
+    document_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column()
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+
+
 class Classification(Base):
     __tablename__ = "classifications"
     __table_args__ = (

@@ -7,6 +7,7 @@ longer, so they only bound how long an abandoned thread can linger.
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 
 import psycopg
@@ -60,3 +61,35 @@ async def run_checks() -> dict[str, str]:
     names = list(CHECKS)
     results = await asyncio.gather(*(_run_check(name, CHECKS[name]) for name in names))
     return dict(zip(names, results, strict=True))
+
+
+_cache: tuple[float, dict[str, str]] | None = None
+_lock: asyncio.Lock | None = None
+_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_lock() -> asyncio.Lock:
+    """One lock per event loop, because an asyncio lock can't move between loops."""
+    global _lock, _lock_loop
+    loop = asyncio.get_running_loop()
+    if _lock is None or _lock_loop is not loop:
+        _lock, _lock_loop = asyncio.Lock(), loop
+    return _lock
+
+
+async def cached_checks() -> dict[str, str]:
+    """Shares one result for a few seconds, so a flood of calls opens no extra connections.
+
+    Callers that arrive while a check is running wait for it instead of starting their own.
+    """
+    global _cache
+    async with _get_lock():
+        now = time.monotonic()
+        if _cache is None or now - _cache[0] >= settings.readiness_cache_seconds:
+            _cache = (now, await run_checks())
+        return _cache[1]
+
+
+def reset_cache() -> None:
+    global _cache
+    _cache = None

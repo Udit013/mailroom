@@ -71,11 +71,13 @@ acceptable with real documents:
 - **One host, with no monitoring or failover.** Oracle may reclaim idle Always Free resources,
   so a deployment can disappear. Backups must be kept off the VM.
 - **API keys never expire**, and `last_used_at` is not recorded. Revocation works.
-- **Files and extracted fields are stored unencrypted**, including names in `stage_results`.
+- **Files, extracted text and extracted fields are stored unencrypted**, including names in
+  `stage_results` and full text in `document_texts`.
 - **PDFs are not scanned.** Only the signature is checked at upload, and they are parsed in
   the worker, not in a sandbox.
-- **`/readyz` is unauthenticated** and opens connections on each call. It relies on the API
-  port staying on loopback, and on Caddy blocking it in a deployment.
+- **`/readyz` is unauthenticated.** Callers share one result for 5 seconds
+  (`READINESS_CACHE_SECONDS`), so a flood of requests can't open a connection each, but it
+  still reveals whether Postgres and RabbitMQ are reachable.
 - **Failpoints ship in the package.** They need an environment variable, so reaching them
   requires access to the host.
 - **Concurrent duplicates can fail a healthy document early.** Each delivery counts an attempt

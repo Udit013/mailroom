@@ -198,7 +198,7 @@ class Services:
             [
                 sys.executable, "-m", "celery", "-A", "mailroom.celery_app", "worker",
                 "-Q", ",".join(WORK_QUEUES), f"--concurrency={concurrency}", "--loglevel=INFO",
-                "--without-gossip", "--without-mingle",
+                "--without-gossip", "--without-mingle", "--without-heartbeat",
             ],
             "worker",
             {"RETRY_BASE_SECONDS": "0.05", **self._failpoint_env(failpoint), **env},

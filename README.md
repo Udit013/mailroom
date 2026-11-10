@@ -151,7 +151,7 @@ and another tenant's document looks like a missing one.
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | The process is alive. Checks no dependency |
-| `GET /readyz` | PostgreSQL and RabbitMQ respond within 2 seconds, otherwise 503 |
+| `GET /readyz` | PostgreSQL and RabbitMQ respond within 2 seconds, otherwise 503. Callers share one result for 5 seconds |
 | `POST /documents` | Upload a PDF or text file. 202 if new, 200 if a repeat |
 | `GET /documents/{id}` | Current state |
 | `GET /documents/{id}/events` | Audit trail |
@@ -234,6 +234,10 @@ decisions are recorded in [docs/adr](docs/adr).
 Compose reads `.env`, and `.env.example` lists the values you must set. Optional tuning values and
 their defaults are in `src/mailroom/config.py`. No secrets belong in the repository. `/docs` and
 `/openapi.json` are off unless `API_DOCS_ENABLED=true`.
+
+Direct dependencies are pinned in `pyproject.toml`, and `constraints.txt` pins the indirect
+ones, so a rebuild installs exactly what the tests last passed with. Without it, a rebuild
+picked up kombu 5.7.0, under which a duplicate-delivery test fails every time.
 
 Application logs are one JSON object per line. Extra fields pass through an allowlist, and
 exceptions keep only their type and location, so document contents and credentials stay out of

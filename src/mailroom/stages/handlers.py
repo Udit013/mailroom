@@ -30,6 +30,7 @@ from mailroom.matcher import (
 from mailroom.models import (
     Classification,
     Document,
+    DocumentText,
     MatchCandidate,
     Matter,
     Stage,
@@ -67,10 +68,23 @@ def _is_readable(extracted: dict[str, Any]) -> bool:
     return bool(extracted["text_status"] == TextStatus.OK.value)
 
 
+def _stored_text(session: Session, document: Document) -> str:
+    stored = session.get(DocumentText, document.id)
+    if stored is not None:
+        return stored.text
+    # Extracted before text was stored, so parse the file again.
+    return _read_text(document).text
+
+
 def extract(session: Session, document: Document) -> dict[str, Any]:
     result = _read_text(document)
     if result.status is not TextStatus.OK:
         return {"text_status": result.status.value}
+    session.execute(
+        insert(DocumentText)
+        .values(document_id=document.id, tenant_id=document.tenant_id, text=result.text)
+        .on_conflict_do_nothing()
+    )
     return {"text_status": result.status.value, **extract_fields(result.text).to_output()}
 
 
@@ -79,7 +93,7 @@ def classify(session: Session, document: Document) -> dict[str, Any]:
     if not _is_readable(_extract_output(session, document)):
         return {"skipped": True}
 
-    classification = CLASSIFIER.classify(_read_text(document).text)
+    classification = CLASSIFIER.classify(_stored_text(session, document))
     session.execute(
         insert(Classification)
         .values(

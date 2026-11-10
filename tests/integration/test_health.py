@@ -1,6 +1,7 @@
 import logging
 import socket
 import time
+from dataclasses import replace
 from functools import partial
 
 import pytest
@@ -21,6 +22,14 @@ CHECK_URLS = {
 def client():
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def fresh_readiness():
+    """Each test sees its own dependencies, not a result cached by the previous test."""
+    health.reset_cache()
+    yield
+    health.reset_cache()
 
 
 @pytest.fixture
@@ -122,3 +131,33 @@ def test_failures_never_expose_credentials(client, monkeypatch, closed_port, cap
 
     assert CANARY not in response.text
     assert CANARY not in caplog.text
+
+
+def counting_check(calls: list[str], name: str):
+    def check() -> None:
+        calls.append(name)
+
+    return check
+
+
+def test_readyz_shares_one_result_so_a_flood_opens_no_extra_connections(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setitem(health.CHECKS, "postgres", counting_check(calls, "postgres"))
+    monkeypatch.setitem(health.CHECKS, "rabbitmq", counting_check(calls, "rabbitmq"))
+
+    statuses = [client.get("/readyz").status_code for _ in range(20)]
+
+    assert statuses == [200] * 20
+    assert sorted(calls) == ["postgres", "rabbitmq"]
+
+
+def test_readyz_checks_again_once_the_cached_result_expires(client, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setitem(health.CHECKS, "postgres", counting_check(calls, "postgres"))
+    monkeypatch.setitem(health.CHECKS, "rabbitmq", counting_check(calls, "rabbitmq"))
+    monkeypatch.setattr(health, "settings", replace(settings, readiness_cache_seconds=0))
+
+    client.get("/readyz")
+    client.get("/readyz")
+
+    assert calls.count("postgres") == 2
