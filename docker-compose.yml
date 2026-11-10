@@ -3,7 +3,7 @@ x-app: &app
   build: .
   volumes:
     - document-data:/data/documents
-  environment:
+  environment: &app-environment
     DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:?copy .env.example to .env}:${POSTGRES_PASSWORD:?copy .env.example to .env}@postgres:5432/${POSTGRES_DB:?copy .env.example to .env}
     BROKER_URL: amqp://${RABBITMQ_USER:?copy .env.example to .env}:${RABBITMQ_PASSWORD:?copy .env.example to .env}@rabbitmq:5672//
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -100,6 +100,12 @@ services:
       -Q mailroom.extract,mailroom.classify,mailroom.match,mailroom.decide,mailroom.file
       --concurrency=2
       --without-gossip --without-mingle --without-heartbeat
+    # Only the worker gets the advisor settings, so tests can never reach the real service.
+    environment:
+      <<: *app-environment
+      ADVISOR: ${ADVISOR:-}
+      ADVISOR_SYNTHETIC_DATA_ONLY: ${ADVISOR_SYNTHETIC_DATA_ONLY:-false}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -14,9 +14,11 @@ from types import TracebackType
 from mailroom.config import settings
 
 ALLOWED_FIELDS = (
+    "advisor_reason",
     "check",
     "count",
     "document_id",
+    "duration_ms",
     "error_type",
     "stage",
     "state",

@@ -5,7 +5,7 @@ COMPOSE := docker compose
 # A separate project, because the test suite truncates tables and purges queues.
 TEST_COMPOSE := docker compose -p mailroom-test
 
-.PHONY: up down migrate test lint seed demo evaluate web drills
+.PHONY: up down migrate test lint seed demo evaluate evaluate-advisor web drills
 
 .env:
 	@echo "Missing .env. Run: cp .env.example .env" >&2
@@ -35,6 +35,18 @@ seed: .env
 evaluate: .env
 	$(TEST_COMPOSE) build test
 	$(TEST_COMPOSE) run --rm --no-deps -T test python -m mailroom.evaluation > docs/EVALUATION.md
+
+# Sends the generated synthetic documents, and nothing else, to Gemini's free tier. Needs
+# GEMINI_API_KEY in your shell. Answers are cached in .cache/, so a run stopped by the daily
+# limit continues where it left off.
+evaluate-advisor: .env
+	@test -n "$$GEMINI_API_KEY" || { echo "Set GEMINI_API_KEY in your shell first" >&2; exit 1; }
+	$(TEST_COMPOSE) build test
+	mkdir -p .cache
+	$(TEST_COMPOSE) run --rm --no-deps -T -v "$(CURDIR)/.cache:/app/.cache" \
+		-e ADVISOR=gemini -e ADVISOR_SYNTHETIC_DATA_ONLY=true -e GEMINI_API_KEY \
+		test python -m mailroom.advisor_evaluation > .cache/report.md
+	mv .cache/report.md docs/ADVISOR_EVALUATION.md
 
 # Injects real failures into a separate stack and writes the run to docs/DRILLS.md.
 drills: .env

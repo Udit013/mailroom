@@ -77,3 +77,27 @@ def test_closed_matter_is_never_filed_automatically():
     decision = decide_outcome(CONFIDENT, [candidate("1.000", closed=True)])
 
     assert (decision.state, decision.review_reason) == (State.NEEDS_REVIEW, "MATTER_CLOSED")
+
+
+def test_a_disagreeing_model_stops_an_automatic_filing():
+    decision = decide_outcome(CONFIDENT, [candidate("1.000")], model_disagrees=True)
+
+    assert decision.state == State.NEEDS_REVIEW
+    assert decision.review_reason == "MODEL_DISAGREEMENT"
+    assert decision.matter_id is None
+
+
+@pytest.mark.parametrize(
+    ("candidates", "reason"),
+    [
+        ([], "NO_CANDIDATE"),
+        (["0.950", "0.900"], "AMBIGUOUS_MATCH"),
+    ],
+)
+def test_a_disagreeing_model_changes_nothing_that_was_not_automatic(candidates, reason):
+    """The model can only take work away from automation, never change another outcome."""
+    decision = decide_outcome(
+        CONFIDENT, [candidate(score) for score in candidates], model_disagrees=True
+    )
+
+    assert decision.review_reason == reason

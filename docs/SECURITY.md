@@ -51,6 +51,8 @@ host. No CORS is configured, because the page and API share an origin in both se
 | Poison documents | Characters Postgres rejects are removed. Unexpected errors fail once, and attempts are limited | Yes |
 | Secrets in logs | An allowlist of log fields, and exception text is dropped | Yes |
 | Sensitive data in the audit trail | Events store codes and field names, not extracted values | Yes |
+| Document text sent to an outside model | Off by default. Refuses to start unless synthetic data only is declared. Text is cut to 8,000 characters. The key is sent in a header and never logged | Yes |
+| A document that manipulates the model | The model can only send a document to review, never file it, and only an allowed type is accepted | Yes |
 | Lost reviewer updates | Version check under a row lock, returning 409 | Yes |
 | Double filing | A stored idempotency key per step, deduplicated by the receiver | Yes, against the fake |
 
@@ -78,6 +80,9 @@ acceptable with real documents:
 - **`/readyz` is unauthenticated.** Callers share one result for 5 seconds
   (`READINESS_CACHE_SECONDS`), so a flood of requests can't open a connection each, but it
   still reveals whether Postgres and RabbitMQ are reachable.
+- **The model advisor uses Gemini's free tier**, whose inputs may be used to improve Google's
+  products. It must only ever see synthetic documents; the setting that enables it is a
+  declaration, not a check.
 - **Failpoints ship in the package.** They need an environment variable, so reaching them
   requires access to the host.
 - **Concurrent duplicates can fail a healthy document early.** Each delivery counts an attempt

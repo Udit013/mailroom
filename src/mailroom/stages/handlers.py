@@ -15,7 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from mailroom import storage
+from mailroom import advisor, storage
 from mailroom.classifier import Classifier, RulesClassifier
 from mailroom.extraction import ExtractedText, TextStatus, extract_text
 from mailroom.fields import Fields, extract_fields, normalize_case_number
@@ -105,11 +105,15 @@ def classify(session: Session, document: Document) -> dict[str, Any]:
         )
         .on_conflict_do_nothing()
     )
-    return {
+    output: dict[str, Any] = {
         "document_type": classification.document_type.value,
         "confidence": str(classification.confidence),
         "scores": classification.scores,
     }
+    suggestion = advisor.SUGGESTION.get()
+    if suggestion is not None:
+        output["advice"] = suggestion.compare(classification.document_type)
+    return output
 
 
 def _candidate_conditions(fields: Fields) -> list[ColumnElement[bool]]:
@@ -199,8 +203,12 @@ def decide_outcome(
     candidates: Sequence[Candidate],
     conflicting: bool = False,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    model_disagrees: bool = False,
 ) -> Decision:
-    """Candidates arrive best first. Anything short of a clear winner goes to a person."""
+    """Candidates arrive best first. Anything short of a clear winner goes to a person.
+
+    A disagreeing model is checked last, so it can stop an automatic filing and nothing else.
+    """
     if conflicting:
         return Decision(State.NEEDS_REVIEW, review_reason="CONFLICTING_MARKERS")
     if confidence < CONFIDENT:
@@ -212,6 +220,8 @@ def decide_outcome(
     if candidates[0].closed:
         return Decision(State.NEEDS_REVIEW, review_reason="MATTER_CLOSED")
     if outcome is MatchOutcome.CONFIDENT:
+        if model_disagrees:
+            return Decision(State.NEEDS_REVIEW, review_reason="MODEL_DISAGREEMENT")
         return Decision(State.READY_TO_FILE, matter_id=candidates[0].matter_id)
     return Decision(State.NEEDS_REVIEW, review_reason="AMBIGUOUS_MATCH")
 
@@ -240,8 +250,15 @@ def decide(session: Session, document: Document) -> dict[str, Any]:
         confidence,
         [Candidate(row.matter_id, row.score, row.signals["closed"]) for row in rows],
         conflicting=Fields.from_output(extracted).conflicting,
+        model_disagrees=_model_disagrees(session, document),
     )
     return _decision_output(decision)
+
+
+def _model_disagrees(session: Session, document: Document) -> bool:
+    classified = session.get_one(StageResult, (document.id, Stage.CLASSIFY.value)).output
+    advice = classified.get("advice") or {}
+    return bool(advice.get("status") == advisor.AdviceStatus.DISAGREED.value)
 
 
 HANDLERS: dict[Stage, Callable[[Session, Document], dict[str, Any]]] = {

@@ -100,6 +100,7 @@ synthetic-data demo on a single VM, see [docs/DEPLOY.md](docs/DEPLOY.md).
 | `make test` | Run all tests against real PostgreSQL and RabbitMQ |
 | `make lint` | Run Ruff and strict mypy |
 | `make evaluate` | Regenerate [docs/EVALUATION.md](docs/EVALUATION.md) from a fixed seed |
+| `make evaluate-advisor` | Measure the optional model advisor on the same synthetic documents |
 | `make drills` | Inject real failures and write [docs/DRILLS.md](docs/DRILLS.md) |
 
 To delete local data as well:
@@ -136,6 +137,7 @@ A document must clear every check below before automatic filing:
 | No candidate with real evidence | `UNMATCHED` | `NO_CANDIDATE` |
 | Best candidate's matter is closed | `NEEDS_REVIEW` | `MATTER_CLOSED` |
 | Score below 0.90, or a lead below 0.15 | `NEEDS_REVIEW` | `AMBIGUOUS_MATCH` |
+| The optional model advisor names a different type | `NEEDS_REVIEW` | `MODEL_DISAGREEMENT` |
 | Otherwise | `READY_TO_FILE`, then `FILED` | |
 
 The match score is a weighted sum: case number 0.55, party name 0.30, date 0.15. A case number
@@ -175,6 +177,28 @@ the key, so a timeout after a successful call can't produce a second filing. A r
 have to offer the same promise. The fake one can inject faults with `FAKE_DMS_FAULTS`, for
 example `CONFIRM:timeout_after:1`.
 
+## Model advisor
+
+The rules classifier always decides. An optional language model can give a second opinion on
+the document type, and it can do one thing only: send a document that would have been filed
+automatically to a person, with `MODEL_DISAGREEMENT`. A wrong, slow or manipulated answer
+therefore costs review time, never a misfiled document.
+
+- **Off by default.** `ADVISOR=gemini` turns it on, and the worker refuses to start unless
+  `ADVISOR_SYNTHETIC_DATA_ONLY=true` is also set, because Gemini's free tier may use what it is
+  sent to improve Google's products.
+- **No lock held.** The call happens between the stage's two transactions, never inside one.
+- **Every failure is "no opinion".** Timeouts (10 seconds), rate limits, server errors, blocked
+  prompts and any answer that isn't exactly one allowed type are recorded with a reason code,
+  and the document carries on as if there were no advisor. After a rate limit the advisor is
+  skipped for 10 minutes.
+- **Nothing sensitive is logged.** The key travels in a header, and only a reason code and a
+  duration reach the logs.
+
+The result is kept in the classification stage's output. `make evaluate-advisor` measures, on
+the same synthetic documents, how many wrong automatic filings the model would stop and how
+many correct ones it would send to review.
+
 ## Reliability
 
 Delivery is at-least-once. Nothing here is exactly-once: a queue and a database can't commit
@@ -211,9 +235,10 @@ What fails, and how it behaves, is in [docs/FAILURE_MODES.md](docs/FAILURE_MODES
 - Text extraction, a rule-based classifier, field extraction and an explainable matcher
 - A review API with optimistic concurrency, and one React page
 - Idempotent, resumable filing into a fake practice-management system
+- An optional language-model second opinion that can only send automatic filings to review
 - An append-only audit trail, a seeded evaluation and failure drills
 
-**Designed, not built:** row-level security, OCR, an LLM classifier, signed webhooks, metrics
+**Designed, not built:** row-level security, OCR, signed webhooks, metrics
 dashboards, a load test and multi-document splitting.
 
 ## Known limitations

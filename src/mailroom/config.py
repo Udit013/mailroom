@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _required(name: str) -> str:
@@ -46,6 +46,17 @@ class Settings:
     readiness_timeout_seconds: float = float(os.environ.get("READINESS_TIMEOUT_SECONDS", "2"))
     # /readyz is public, so callers share one result instead of each opening connections.
     readiness_cache_seconds: float = float(os.environ.get("READINESS_CACHE_SECONDS", "5"))
+    # The optional model second opinion. See mailroom/advisor.py before enabling it.
+    advisor: str = os.environ.get("ADVISOR", "")
+    advisor_synthetic_data_only: bool = (
+        os.environ.get("ADVISOR_SYNTHETIC_DATA_ONLY", "false").lower() == "true"
+    )
+    gemini_api_key: str = field(default=os.environ.get("GEMINI_API_KEY", ""), repr=False)
+    gemini_model: str = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    # Well inside the stage time limit, so a slow answer is dropped, never a killed stage.
+    advisor_timeout_seconds: float = float(os.environ.get("ADVISOR_TIMEOUT_SECONDS", "10"))
+    advisor_max_chars: int = int(os.environ.get("ADVISOR_MAX_CHARS", "8000"))
+    advisor_cooldown_seconds: float = float(os.environ.get("ADVISOR_COOLDOWN_SECONDS", "600"))
 
 
 settings = Settings()

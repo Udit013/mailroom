@@ -9,6 +9,7 @@ __pycache__/
 Mailroom_3-Day_Plan_and_Prompts.docx
 node_modules/
 web/dist/
+.cache/
 
 # Local assistant and editor configuration, never part of the project
 CLAUDE.md

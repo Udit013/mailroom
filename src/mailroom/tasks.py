@@ -19,11 +19,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from mailroom import failpoints, filing, outbox, state_machine
+from mailroom import advisor, failpoints, filing, outbox, state_machine
 from mailroom.celery_app import app
 from mailroom.config import settings
 from mailroom.db import session_scope
-from mailroom.models import Document, ReviewItem, Stage, StageResult, State
+from mailroom.models import Document, DocumentText, ReviewItem, Stage, StageResult, State
 from mailroom.stages import NEXT_STAGE, PermanentStageError, TransientStageError
 from mailroom.stages.handlers import HANDLERS
 
@@ -158,6 +158,16 @@ def _skip(document_id: uuid.UUID, stage: Stage, document: Document | None) -> St
     return StageOutcome.SKIPPED
 
 
+def _suggestion(document_id: uuid.UUID, stage: Stage) -> advisor.Suggestion | None:
+    """The advisor calls an outside service, so it runs here, where no row lock is held."""
+    if stage is not Stage.CLASSIFY or advisor.ADVISOR is None:
+        return None
+    with session_scope() as session:
+        stored = session.get(DocumentText, document_id)
+        text = stored.text if stored is not None else None
+    return advisor.suggest(text)
+
+
 def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
     """Run one delivery of a stage, ignoring any message that is no longer current.
 
@@ -173,6 +183,7 @@ def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
     Returns EXHAUSTED when _begin_attempt() reports that attempts are used up.
     Returns COMPLETED after _apply_stage() commits. FILE runs run_filing_steps() instead,
     because it calls an external system and must not hold the row lock while it does.
+    For the same reason, CLASSIFY asks the optional advisor between the two transactions.
 
     PermanentStageError and TransientStageError from a handler propagate to the caller,
     with the attempt already committed and the stage's work rolled back.
@@ -191,15 +202,19 @@ def run_stage(document_id: uuid.UUID, stage: Stage) -> StageOutcome:
         logger.info("stage completed", extra=_context(document_id, stage))
         return StageOutcome.COMPLETED
 
-    with session_scope() as session:
-        # Blocks rather than using NOWAIT: a lock holder may be a stale message that will ack
-        # without doing the work, so giving up here could discard the only valid message.
-        # The check must run again: another delivery can finish the stage between the two
-        # transactions, and this one then waits for that commit and sees it here.
-        document = session.get(Document, document_id, with_for_update=True)
-        if not _is_current(document, stage):
-            return _skip(document_id, stage, document)
-        _apply_stage(session, document, stage)
+    token = advisor.SUGGESTION.set(_suggestion(document_id, stage))
+    try:
+        with session_scope() as session:
+            # Blocks rather than using NOWAIT: a lock holder may be a stale message that will
+            # ack without doing the work, so giving up here could discard the only valid
+            # message. The check must run again: another delivery can finish the stage between
+            # the two transactions, and this one then waits for that commit and sees it here.
+            document = session.get(Document, document_id, with_for_update=True)
+            if not _is_current(document, stage):
+                return _skip(document_id, stage, document)
+            _apply_stage(session, document, stage)
+    finally:
+        advisor.SUGGESTION.reset(token)
 
     logger.info("stage completed", extra=_context(document_id, stage))
     return StageOutcome.COMPLETED

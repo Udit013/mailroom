@@ -26,8 +26,19 @@ but has not been exercised.
 | Broker container recreated | Messages survive on the `rabbitmq-data` volume | Automatic | Checked by hand |
 | Broker volume deleted | Queued messages are lost, and the sweeper re-dispatches active documents | Automatic, after about two minutes | Test, by purging queues |
 | Broker withholds a confirm | The relay times out and the row stays unpublished | Automatic | Test |
-| Unroutable message | Publishing raises, and the row stays unpublished | Needs the queue to exist | Test |
+| Unroutable message, for example a deleted queue | Publishing raises, and the row stays unpublished | Automatic: the relay's next connection declares the queue again | Test |
 | Network black hole or blocked write | Should be ended by the socket timeouts or the pass deadline | Unknown | **Not verified** |
+
+## Model advisor
+
+| Failure | Behaviour | Recovery | Evidence |
+|---|---|---|---|
+| Timeout, server error or network failure | No opinion, recorded with a reason code. The document is processed as without an advisor | Automatic | Test |
+| Rate limit | No opinion, and the advisor is skipped for 10 minutes | Automatic | Test |
+| An answer that isn't exactly one allowed type, or a blocked prompt | No opinion | Automatic | Test |
+| A bug in the advisor | No opinion, with only the exception type recorded | Automatic | Test |
+| `ADVISOR=gemini` without the synthetic-data setting or a key | The worker refuses to start | Fix the configuration | Test |
+| The model disagrees with the rules | An automatic filing goes to review instead. Nothing else changes | A person decides | Test |
 
 ## PostgreSQL
 
